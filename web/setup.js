@@ -8,7 +8,9 @@
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const WIN = document.documentElement.classList.contains('plat-win');
   const UNIT = WIN ? 1024 : 1000;   // each system's own way of counting a gigabyte, so the numbers match Finder or Explorer
-  const CAN = { removeAi: true, repair: true };   // one switch each, should a build of the engine be without remove-ai or repair
+  // In a browser over the web service (docs/WEB-SERVICE.md) the server has no file picker and its folders are not the reader's
+  const IN_WINDOW = location.protocol === 'lastbook:' || location.hostname === 'lastbook.invalid';
+  const CAN = { removeAi: true, repair: true, pick: IN_WINDOW };   // one switch each, should a build of the engine be without remove-ai or repair
   const MANAGE_ASKED = /manage/.test(location.hash);   // #manage: the bridge allows no ?query on the top page
 
   const ICO = {
@@ -239,8 +241,8 @@
       <section class="s-sum" id="sum" aria-live="polite"></section>
       <div class="s-go">
         <button class="btn big" id="start"></button>
-        ${c ? '' : '<button class="s-link" id="haveLib">Choose an existing library folder</button>'}
-        <button class="s-link" id="haveFile">Choose a library zip or AI model file</button>
+        ${c || !CAN.pick ? '' : '<button class="s-link" id="haveLib">Choose an existing library folder</button>'}
+        ${CAN.pick ? '<button class="s-link" id="haveFile">Choose a library zip or AI model file</button>' : ''}
       </div>
       <p class="s-note" id="haveNote" hidden></p>`;
     main.querySelectorAll('input[name=pack]').forEach(r => r.onchange = () => { choice.pack = r.value; shortfall = null; mapSection(); summary() });
@@ -249,7 +251,7 @@
     $('#start').onclick = start;
     if ($('#toManage')) $('#toManage').onclick = () => go('manage');
     if ($('#haveLib')) $('#haveLib').onclick = () => haveLibrary(false);
-    $('#haveFile').onclick = () => haveLibrary(true);
+    if ($('#haveFile')) $('#haveFile').onclick = () => haveLibrary(true);
     mapSection();
     summary();
   }
@@ -301,7 +303,7 @@
     if (newPack && choice.pack === c.pack && !mapMissing()) b.textContent = 'Download and install update';
     const ch = $('#chFolder'); if (ch) ch.onclick = pickFolder;
   }
-  const folderRow = () => `<div class="s-folder">${ico('folder')}<span><small>Saves to</small><b title="${esc(folder)}">${esc(home(folder))}</b></span>${cur() ? '' : '<button class="btn plain" id="chFolder">Change…</button>'}</div>`;
+  const folderRow = () => `<div class="s-folder">${ico('folder')}<span><small>Saves to</small><b title="${esc(folder)}">${esc(home(folder))}</b></span>${cur() || !CAN.pick ? '' : '<button class="btn plain" id="chFolder">Change…</button>'}</div>`;
 
   async function pickFolder() {
     const b = $('#chFolder'); b.disabled = true;
@@ -530,8 +532,16 @@
       const b = $('#open'); b.disabled = true; b.textContent = 'Opening your library…';
       const r = await call('finish', {}).catch(e => ({ error: e.message }));   // on {ok} the app relaunches itself into the library
       if (!r || r.error) { b.disabled = false; b.textContent = 'Open the library'; const n = $('#openNote'); n.hidden = false; n.textContent = (r && r.error) || 'The library did not open. Try again.' }
-      else live.textContent = 'Opening your library…';
+      else { live.textContent = 'Opening your library…'; if (!IN_WINDOW) reopen() }
     };
+  }
+
+  /* the web service restarts into the new library: open it once the server answers again (the app's window does this itself) */
+  function reopen() {
+    const again = () => setTimeout(() => fetch('/api/setup/state', { cache: 'no-store' })
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then(st => st.mode === 'manage' ? location.replace('/') : again(), again), 2000);
+    again();
   }
 
   /* keyboard: Escape closes a question that is open */

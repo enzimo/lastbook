@@ -4,7 +4,7 @@ Used by server.py (/api/retrieve, /api/chat, /api/assistant/status). The model i
 MODEL_URL; clients never see it. Tools can read the public survival library (catalog ids, pages, transcripts, map
 gazetteer) and nothing else: no file paths, URLs or shell input are accepted from the model.
 """
-import base64, json, re, socket, sqlite3, threading, time, urllib.error, urllib.request
+import base64, json, re, socket, sqlite3, threading, time, urllib.error, urllib.parse, urllib.request
 import retrieval
 from engine.paths import ro_uri
 
@@ -20,15 +20,47 @@ def loopback_base(value):
     return base
 
 
+def remote_base(value):
+    """An OpenAI-compatible server on another computer (the web service: LASTBOOK_AI_BASE_URL), or ValueError. http or https,
+    a host, an optional port and path; no user name, query or fragment. A trailing /v1 is dropped: the paths below add it."""
+    u = urllib.parse.urlsplit(value.strip())
+    if u.scheme not in ('http', 'https') or not u.hostname or u.username or u.password or u.query or u.fragment:
+        raise ValueError('not an http(s) address')
+    u.port  # raises ValueError for a bad port
+    path = u.path.rstrip('/')
+    if path.endswith('/v1'):
+        path = path[:-3]
+    return urllib.parse.urlunsplit((u.scheme, u.netloc, path, '', ''))
+
+
+def secret(name):
+    """A setting from NAME_FILE (a Docker secret) or else NAME, stripped; '' if neither."""
+    path = os.environ.get(name + '_FILE')
+    if path:
+        try:
+            with open(path, encoding='utf-8') as f:
+                return f.read().strip()
+        except OSError as e:
+            raise SystemExit(f'{name}_FILE cannot be read ({type(e).__name__})') from None
+    return os.environ.get(name, '').strip()
+
+
+# The model server. By default one on this computer (SURVIVAL_MODEL_BASE, loopback only). The web service may instead name an
+# AI host elsewhere with LASTBOOK_AI_BASE_URL, and LASTBOOK_AI_MODEL and LASTBOOK_AI_API_KEY(_FILE). With neither running,
+# Chat lists the matching library pages instead of answering.
+REMOTE = bool(os.environ.get('LASTBOOK_AI_BASE_URL', '').strip())
 try:
-    BASE = loopback_base(os.environ.get('SURVIVAL_MODEL_BASE', 'http://127.0.0.1:19443'))
+    BASE = remote_base(os.environ['LASTBOOK_AI_BASE_URL']) if REMOTE else loopback_base(os.environ.get('SURVIVAL_MODEL_BASE', 'http://127.0.0.1:19443'))
 except ValueError:
-    raise SystemExit('SURVIVAL_MODEL_BASE must be a loopback http address') from None
+    raise SystemExit('LASTBOOK_AI_BASE_URL must be an http(s) address' if REMOTE else 'SURVIVAL_MODEL_BASE must be a loopback http address') from None
 MODEL_URL = BASE + '/v1/chat/completions'
 MODELS_URL = BASE + '/v1/models'
-MODEL = os.environ.get('SURVIVAL_MODEL', 'deepseek-v4.1-flash')
+MODEL = os.environ.get('LASTBOOK_AI_MODEL') or os.environ.get('SURVIVAL_MODEL', 'deepseek-v4.1-flash')
+API_KEY = secret('LASTBOOK_AI_API_KEY')
 # Some servers' thinking models (Ollama's gemma4) spend a whole round's tokens thinking at 'low'; 'none' answers straight away.
+# Empty: not sent at all, for servers that refuse the field.
 REASONING_EFFORT = os.environ.get('SURVIVAL_REASONING_EFFORT', 'low')
+WHO = 'The AI host' if REMOTE else 'The local model'
 MAX_ROUNDS = 2  # tool rounds; then the model must answer with what it has
 S = None        # server module, set by init()
 INDEX = None    # retrieval.Index
@@ -59,10 +91,14 @@ _opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedire
 
 
 def model_open(req, timeout):
-    """The only way out of this program to a model, and it goes no further than this computer."""
-    url = req if isinstance(req, str) else req.full_url
-    if not LOOPBACK.fullmatch(url):
-        raise urllib.error.URLError('not a loopback address')
+    """The only way out of this program to a model: the two addresses of the model server at BASE, which is on this computer
+    unless the web service names an AI host (LASTBOOK_AI_BASE_URL). Redirects are not followed and no proxy is used."""
+    if isinstance(req, str):
+        req = urllib.request.Request(req)
+    if req.full_url not in (MODEL_URL, MODELS_URL) or not (REMOTE or LOOPBACK.fullmatch(req.full_url)):
+        raise urllib.error.URLError('not the model server')
+    if API_KEY:
+        req.add_unredirected_header('Authorization', 'Bearer ' + API_KEY)
     return _opener.open(req, timeout=timeout)
 
 
@@ -81,7 +117,7 @@ def model_status():
                 ids = [m['id'] for m in json.load(r).get('data', [])]
             _status.update(online=MODEL in ids, error=None if MODEL in ids else f'{MODEL} not listed')
         except Exception as e:
-            _status.update(online=False, error=type(e).__name__)
+            _status.update(online=False, error=_why(e))
         _status['at'] = time.time()
     return {'model': MODEL, 'online': _status['online'], 'error': _status['error'], 'local': local, 'vision': True,
             'index': dict(INDEX.status) if INDEX else {'state': 'off'}}
@@ -404,14 +440,16 @@ def _http_round(msgs, tools, cancelled, wrote, set_state):
         if i > 0 and m['role'] == 'system':
             m = {**m, 'role': 'user', 'content': '[Note from the Lastbook app, not from the person]\n' + m['content']}
         wire.append(m)
-    body = {'model': MODEL, 'messages': wire, 'stream': True, 'temperature': 0.2, 'max_tokens': ROUND_TOKENS, 'reasoning_effort': REASONING_EFFORT}
+    body = {'model': MODEL, 'messages': wire, 'stream': True, 'temperature': 0.2, 'max_tokens': ROUND_TOKENS}
+    if REASONING_EFFORT:
+        body['reasoning_effort'] = REASONING_EFFORT
     if tools:
         body['tools'] = tools
     req = urllib.request.Request(MODEL_URL, json.dumps(body).encode(), {'Content-Type': 'application/json'})
     try:
         resp = model_open(req, timeout=180)
     except Exception as e:
-        return f'The local model is not responding ({type(e).__name__}).'
+        return f'{WHO} is not responding ({_why(e)}).'
     calls, content = {}, ''
     try:
         for raw in resp:
@@ -440,10 +478,15 @@ def _http_round(msgs, tools, cancelled, wrote, set_state):
                 c['name'] += f.get('name') or ''
                 c['args'] += f.get('arguments') or ''
     except (socket.timeout, urllib.error.URLError, ConnectionError) as e:
-        return f'The local model stopped responding ({type(e).__name__}).'
+        return f'{WHO} stopped responding ({type(e).__name__}).'
     finally:
         resp.close()
     return content, calls
+
+
+def _why(e):
+    """Why a request to the model server failed, for the person: the HTTP status (401 says the API key is wrong), else the error's kind."""
+    return f'HTTP {e.code}' if isinstance(e, urllib.error.HTTPError) else type(e).__name__
 
 
 def _local_round(msgs, tools, cancelled, wrote, set_state):
@@ -560,7 +603,7 @@ def chat(messages, about, emit, cancelled):
         set_state('thinking' if rnd == 0 else 'reading')
         got = (_local_round if local else _http_round)(msgs, None if last else tools, cancelled, wrote, set_state)
         if got in ('stopped', None):
-            emit({'type': 'stopped'} if got else {'type': 'error', 'error': 'model_unavailable', 'text': 'The local model stopped responding.'})
+            emit({'type': 'stopped'} if got else {'type': 'error', 'error': 'model_unavailable', 'text': f'{WHO} stopped responding.'})
             return
         if isinstance(got, str):
             emit({'type': 'error', 'error': 'model_unavailable', 'text': got})

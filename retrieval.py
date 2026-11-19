@@ -18,7 +18,7 @@ HERE = lastbook_paths.DATA  # holds derived/
 if not lastbook_paths.FROZEN and os.name != 'nt' and sys.version_info[:2] == (3, 12):  # Mac binaries that belong to the program, built for 3.12, so they would shadow another Python's numpy; never import code from a data folder
     sys.path.insert(0, str(lastbook_paths.APP / 'derived' / 'pylib'))
 LIB = lastbook_paths.LIB
-IDX = HERE / 'derived' / 'index'
+IDX = Path(os.environ['LASTBOOK_INDEX_DIR']) if os.environ.get('LASTBOOK_INDEX_DIR') else HERE / 'derived' / 'index'  # elsewhere for a library on a network share: SQLite's WAL needs a local disk
 MODEL = HERE / 'derived' / 'models' / 'bge-small-en-v1.5'
 DIM = 384
 CHUNK, OVERLAP, MINLEN = 1100, 150, 80

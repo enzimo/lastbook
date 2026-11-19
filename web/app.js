@@ -6,7 +6,8 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': 
 const fileUrl = p => '/' + String(p || '').split('/').map(encodeURIComponent).join('/');
 const main = $('#main');
 const IN_WINDOW = location.protocol === 'lastbook:' || location.hostname === 'lastbook.invalid';   // the desktop app, not a browser over the server
-if (IN_WINDOW) $('#sideSettings').hidden = false;   // Library and local AI (web/setup.html) is in the desktop app only
+if (IN_WINDOW) $('#sideSettings').hidden = false;   // Library and local AI (web/setup.html): the desktop app, and the web service where setup is open to this browser
+else fetch('/api/setup/job', { cache: 'no-store' }).then(r => { if (r.ok) $('#sideSettings').hidden = false }).catch(() => { });
 
 /* ---------------------------------------------------------------- icons -- */
 const I = {

@@ -1,0 +1,9 @@
+# The web service's Python packages (packaging/docker/Dockerfile). The Linux app's list (packaging/linux/requirements_linux.txt)
+# without PyInstaller, plus onnxruntime and tokenizers from packaging/requirements.txt for meaning-based search (retrieval.py;
+# without them, or without the model in the library's derived/models, search is keyword-only).
+libzim==3.13.1
+numpy==2.4.6
+beautifulsoup4==4.15.0
+pypdfium2==5.14.0
+onnxruntime==1.31.1
+tokenizers==0.23.3

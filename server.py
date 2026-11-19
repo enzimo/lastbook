@@ -5,6 +5,8 @@
   python3 server.py --lan           # also reachable from phones on the same Wi-Fi (no internet needed)
   python3 server.py --data <folder> # data folder holding library-data/ and derived/ (or set LASTBOOK_DATA)
 
+As a web service behind a reverse proxy (Docker, Traefik): docs/WEB-SERVICE.md and the LASTBOOK_* settings below.
+
 It builds on engine/library.py for every original file, the full-text index, ZIM encyclopedias and video Range
 requests, and adds a few read-only endpoints:
 
@@ -51,6 +53,17 @@ remote_records = library.remote_records  # videos moved to remote drives by the 
 INDEX = None  # retrieval.Index, created in main()
 LAN_KEY = None
 SERVER = None  # the running HTTP server, so the packaged app's launcher can stop it
+
+# The web service (docs/WEB-SERVICE.md). All off unless set, so the desktop app and a plain server.py behave as before.
+# LASTBOOK_ALLOWED_HOSTS  host names served besides localhost and bare IP addresses, comma-separated (lastbook.example.org)
+# LASTBOOK_COOKIE_SECURE  1: the access-key cookie is sent over HTTPS only
+# LASTBOOK_REMOTE_SETUP   1: a browser holding the access key may run setup (/api/setup/), and a data folder without a
+#                         library opens on setup; finishing setup restarts this process into the new library
+# LASTBOOK_SETTINGS       setup's own folder (its job, a staged switch, and here the access key); default as the desktop app's
+ALLOWED_HOSTS = frozenset(h.strip().lower().rstrip('.') for h in os.environ.get('LASTBOOK_ALLOWED_HOSTS', '').split(',') if h.strip())
+COOKIE_SECURE = os.environ.get('LASTBOOK_COOKIE_SECURE') == '1'
+REMOTE_SETUP = os.environ.get('LASTBOOK_REMOTE_SETUP') == '1'
+SETUP_MODE = False  # True while the data folder holds no library yet (web service only): only setup is served
 
 _pdf_lock = threading.Lock()  # PDFium is not thread-safe
 
@@ -1719,9 +1732,10 @@ class Handler(library.Handler):
         return bool(self.HOST_SYNTAX.fullmatch(host))
 
     def host_ok(self):
-        """Only localhost or a bare IP address. A web page using DNS rebinding arrives under its own domain name and is refused."""
+        """Only localhost, a bare IP address or a name in LASTBOOK_ALLOWED_HOSTS. A web page using DNS rebinding arrives under
+        its own domain name and is refused."""
         host = urllib.parse.urlsplit('//' + (self.headers.get('Host') or 'localhost')).hostname or ''
-        if host == 'localhost':
+        if host == 'localhost' or host.rstrip('.') in ALLOWED_HOSTS:
             return True
         try:
             ipaddress.ip_address(host)
@@ -1819,7 +1833,9 @@ class Handler(library.Handler):
         return self.send_json({'error': f'Server error ({sys.exc_info()[0].__name__}).'}, 500)
 
     def lan_ok(self):
-        """Loopback is always allowed. Other devices need the LAN access key once (then a cookie)."""
+        """Loopback is always allowed. Other devices need the LAN access key once (then a cookie). With LASTBOOK_REMOTE_SETUP,
+        a request holding the key may also use /api/setup/ (engine/setup/api.py reads remote_setup_ok)."""
+        self.remote_setup_ok = False
         ip = self.client_address[0]
         if ip in ('127.0.0.1', '::1') or ip.startswith('::ffff:127.'):
             return True
@@ -1829,12 +1845,27 @@ class Handler(library.Handler):
         cookie = self.headers.get('Cookie') or ''
         if secrets.compare_digest(qs.get('key', [''])[0], LAN_KEY):
             self.send_response(302)
-            self.send_header('Set-Cookie', f'sg_key={LAN_KEY}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000')
+            self.send_header('Set-Cookie', f'sg_key={LAN_KEY}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000' + ('; Secure' if COOKIE_SECURE else ''))
             self.send_header('Location', '/')
+            self.send_header('Cache-Control', 'no-store')
             self.end_headers()
             return None
         m = re.search(r'(?:^|;\s*)sg_key=([^;]+)', cookie)
-        return bool(m and secrets.compare_digest(m.group(1), LAN_KEY))
+        ok = bool(m and secrets.compare_digest(m.group(1), LAN_KEY))
+        self.remote_setup_ok = ok and REMOTE_SETUP
+        return ok
+
+    def setup_mode_get(self, path):
+        """No library yet (web service): the setup page, the web files it uses, and /api/setup/. Nothing else."""
+        if path in ('/', '/index.html'):
+            return self.send_static(WEB / 'setup.html')
+        if path.startswith('/ui/') and '/..' not in path:
+            p = (WEB / path[4:]).resolve()
+            if WEB.resolve() in p.parents and p.is_file():
+                return self.send_static(p)
+        if path.startswith('/api/setup/'):
+            return setup_api.handle(self, self.command, path)
+        return self.send_json({'error': 'There is no library here yet. Open / to set it up.'}, 503 if path.startswith('/api/') else 404)
 
     def deny(self):
         body = b'<!doctype html><meta name=viewport content="width=device-width"><title>Lastbook</title><p style="font:18px system-ui;padding:24px">This guide is shared on this network only with an access link. Ask the person running it for the link shown when it started.</p>'
@@ -1854,6 +1885,8 @@ class Handler(library.Handler):
             if not ok:
                 return self.deny()
             path = urllib.parse.unquote(urllib.parse.urlsplit(self.path).path)
+            if SETUP_MODE:
+                return self.setup_mode_get(path)
             if not self.path_ok(path):
                 return self.send_error(404)
             if path in ('/', '/index.html', '/sw.js'):
@@ -1884,6 +1917,8 @@ class Handler(library.Handler):
         rpath = urllib.parse.urlsplit(self.path).path
         if rpath.startswith('/api/setup/'):  # first-run setup and Library and local AI: engine/setup/api.py, this computer only
             return setup_api.handle(self, 'POST', rpath)
+        if SETUP_MODE:
+            return self.send_json({'error': 'There is no library here yet. Open / to set it up.'}, 503)
         if rpath.startswith('/api/update/'):  # Check for updates, when the person asks: engine/update.py, this computer only
             from engine import update
             return update.handle(self, 'POST', rpath)
@@ -1970,6 +2005,8 @@ class Handler(library.Handler):
                 return self.deny()
             url = urllib.parse.urlsplit(self.path)
             path = urllib.parse.unquote(url.path)
+            if SETUP_MODE:
+                return self.setup_mode_get(path)
             if not self.path_ok(path):
                 return self.send_json({'error': 'not found'}, 404)
             qs = {k: v[0] for k, v in urllib.parse.parse_qs(url.query).items()}
@@ -2127,8 +2164,9 @@ def serve(port, lan=False):
     """The HTTP server version: binds the port and answers until stopped."""
     global LAN_KEY, SERVER
     if lan:
-        kf = HERE / 'derived' / 'lan-key'
+        kf = Path(os.environ.get('LASTBOOK_KEY_FILE') or HERE / 'derived' / 'lan-key')
         if not kf.exists():
+            kf.parent.mkdir(parents=True, exist_ok=True)
             kf.write_text(secrets.token_urlsafe(18))
             os.chmod(kf, 0o600)
         LAN_KEY = kf.read_text(encoding='utf-8').strip()
@@ -2144,8 +2182,47 @@ def serve(port, lan=False):
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.connect(('10.255.255.255', 1)); ip = s.getsockname()[0]; s.close()
         except OSError:
             ip = '<this-computer-ip>'
-        print(f'Phones on this network: http://{ip}:{port}/?key={LAN_KEY}  (keep this link private; delete derived/lan-key to change it)', flush=True)
+        print(f'Phones on this network: http://{ip}:{port}/?key={LAN_KEY}  (keep this link private; delete {kf} to change it)', flush=True)
+        for host in sorted(ALLOWED_HOSTS):
+            print(f'Access link: {"https" if COOKIE_SECURE else "http"}://{host}/?key={LAN_KEY}', flush=True)
     srv.serve_forever()
+
+
+def restart():
+    """Setup finished (web service): start this program again, which first makes the staged switch to the new library.
+    The listening socket is not inherited, so the new process can bind the port again."""
+    print('Lastbook: setup finished; restarting into the library', flush=True)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os.execv(sys.executable, [sys.executable] + sys.argv)
+
+
+def web_setup(no_index):
+    """LASTBOOK_REMOTE_SETUP: the web service's start. Make a switch setup staged before anything opens the library, then
+    serve the library, or only setup while there is none. Setup always installs into this data folder, named LastbookData."""
+    global SETUP_MODE
+    from engine.setup import install
+    from engine.setup.manifest import Manifest
+    if HERE.name != install.DATA_NAME:
+        raise SystemExit(f'With LASTBOOK_REMOTE_SETUP=1 the data folder must be named {install.DATA_NAME} (for example '
+                         f'--data /data/{install.DATA_NAME}): setup unpacks beside it and switches by renaming it.')
+    settings = setup_api.default_settings()
+    os.environ.setdefault('LASTBOOK_KEY_FILE', str(settings / 'lan-key'))   # not in the library folder, which setup replaces
+    lib, note = setup_api.startup(settings, only=HERE)
+    if note and note.get('error'):
+        print('setup: the staged library was not switched to:', note['error'], flush=True)
+    options = {'settings_dir': settings, 'default_parent': HERE.parent, 'on_finish': lambda folder: restart(),
+               'manifest': Manifest(models=False)}
+    if not (LIB / 'catalog.json').is_file():
+        SETUP_MODE = True
+        HERE.parent.mkdir(parents=True, exist_ok=True)
+        setup_api.configure(mode='first-run', **options)
+        print(f'Lastbook: no library in {HERE} yet; open the access link to set it up', flush=True)
+        return
+    init(no_index)
+    if note:
+        setup_api.opened(settings, HERE, note)
+    setup_api.configure(mode='manage', current=HERE, **options)
 
 
 def main():
@@ -2155,7 +2232,10 @@ def main():
     ap.add_argument('--no-index', action='store_true', help='do not update the semantic index in the background')
     ap.add_argument('--data', help='data folder holding library-data/ and derived/ (or set LASTBOOK_DATA); default: beside this program')
     a = ap.parse_args()
-    init(a.no_index)
+    if REMOTE_SETUP:
+        web_setup(a.no_index)
+    else:
+        init(a.no_index)
     serve(a.port, a.lan)
 
 

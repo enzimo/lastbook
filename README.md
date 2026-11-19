@@ -152,6 +152,9 @@ LASTBOOK_DATA=/path/to/LastbookData python3 server.py          # then open http:
 See [docs/LIBRARY-SERVER.md](docs/LIBRARY-SERVER.md). It was written for the household library this project grew out of,
 so some of its paths and ports describe that setup. The desktop app does not use this port.
 
+To run it as a **web service** in a container behind a reverse proxy, with setup in the browser and Chat through an
+OpenAI-compatible server elsewhere, see [docs/WEB-SERVICE.md](docs/WEB-SERVICE.md) and `packaging/docker/Dockerfile`.
+
 ## Build the apps
 
 The builds write into `derived/app-build/` and refuse to finish if the package scan finds something that must not ship:
