@@ -20,6 +20,27 @@ import server  # noqa: E402
 import assistant  # noqa: E402
 from engine.setup import api, manifest  # noqa: E402
 
+# server and assistant read these settings once, at import. When another test module imported them first (the suite runs
+# test_bridge earlier), the environment above came too late: set the values here, and put the old ones back afterwards.
+_AI_BASE = assistant.remote_base(os.environ['LASTBOOK_AI_BASE_URL'])
+_PATCHES = [
+    mock.patch.multiple(server, ALLOWED_HOSTS=frozenset({'lastbook.example.org', 'other.example.org'}), COOKIE_SECURE=True,
+                        REMOTE_SETUP=True),
+    mock.patch.multiple(assistant, REMOTE=True, BASE=_AI_BASE, MODEL_URL=_AI_BASE + '/v1/chat/completions',
+                        MODELS_URL=_AI_BASE + '/v1/models', MODEL='m1', API_KEY='k-123', WHO='The AI host'),
+]
+
+
+def setUpModule():
+    for p in _PATCHES:
+        p.start()
+
+
+def tearDownModule():
+    for p in reversed(_PATCHES):
+        p.stop()
+
+
 KEY = 'k' * 24
 
 
