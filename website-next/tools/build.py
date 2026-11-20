@@ -3,7 +3,7 @@
 
 Run:  python3 -I tools/build.py        (from anywhere; paths are relative to this file)
 
-It writes index.html, download/, library/, privacy/, credits/ and 404.html next to
+It writes index.html, community/, download/, library/, privacy/, credits/ and 404.html next to
 this folder, fills the credits list from data/credits.json (so it works with no
 JavaScript), and adds a short content hash to style.css and the scripts so they
 can be cached for a year. Edit the text here, not in the built .html files.
@@ -32,18 +32,15 @@ def h(path):
 
 
 CSS = "/style.css?v=" + h("style.css")
+COMMUNITY_CSS = "/community.css?v=" + h("community.css")
+CAROUSEL_JS = "/community-carousel.js?v=" + h("community-carousel.js")
+PROMPT_JS = "/community-prompt.js?v=" + h("community-prompt.js")
 JS = "/os.js?v=" + h("os.js")
 CROWD = "/crowd.js?v=" + h("crowd.js")
 FONT = "/fonts/Nunito-Variable.woff2"
 WORDMARK = (ROOT / "tools/art/wordmark.svg").read_text().strip()
 GITHUB = "https://github.com/Immortal-Protocols/lastbook"
-# A build-time snapshot: no visitor-side GitHub request or tracking.
-GITHUB_STATS = json.loads((ROOT / "data/github-stats.json").read_text())
-if GITHUB_STATS.get("repository") != "Immortal-Protocols/lastbook":
-    raise ValueError("GitHub stats must refer to Lastbook")
-GITHUB_STARS = GITHUB_STATS["stars"]
-if type(GITHUB_STARS) is not int or GITHUB_STARS < 0:
-    raise ValueError("GitHub stars must be a nonnegative integer")
+
 
 APPLE = ('<svg aria-hidden="true" viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M16.4 12.6c0-2.6 2.1-3.8 2.2-3.9-1.2-1.8-3.1-2-3.7-2-1.6-.2-3.1.9-3.9.9-.8 0-2-.9-3.4-.9-1.7 0-3.3 1-4.2 2.6-1.8 3.1-.5 7.7 1.3 10.2.9 1.2 1.9 2.6 3.2 2.6 1.3-.1 1.8-.8 3.3-.8 1.6 0 2 .8 3.4.8 1.4 0 2.3-1.3 3.1-2.5 1-1.4 1.4-2.8 1.4-2.9 0 0-2.7-1-2.7-4.1ZM13.9 5c.7-.9 1.2-2.1 1.1-3.3-1 0-2.3.7-3 1.6-.7.8-1.2 2-1.1 3.2 1.2.1 2.3-.6 3-1.5Z"/></svg>')
 WINDOWS = ('<svg aria-hidden="true" viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M2 4.3 10 3.2v7.7H2Zm9-1.2L22 1.5v9.4H11ZM2 12h8v7.8l-8-1.1Zm9 0h11v9.5l-11-1.5Z"/></svg>')
@@ -56,9 +53,10 @@ def ink(name, w, h, cls="", alt=""):
     return f'<img{c} src="/img/ink/{name}.svg" width="{w}" height="{h}" alt="{alt}" loading="lazy" decoding="async">'
 
 
-def head(title, desc, path, extra="", index=True):
+def head(title, desc, path, extra="", index=True, body_class=""):
     full = title if title.startswith("Lastbook") else f"{title} · Lastbook"
     canon = f'<link rel="canonical" href="{SITE}{path}">\n' if path else ""
+    body_attr = f' class="{body_class}"' if body_class else ""
     ogurl = f'<meta property="og:url" content="{SITE}{path}">\n' if path else ""
     return f"""<!doctype html>
 <html lang="en">
@@ -88,29 +86,28 @@ def head(title, desc, path, extra="", index=True):
 <meta name="twitter:image:alt" content="Lastbook — Everything you need to survive and rebuild society.">
 <link rel="preload" href="{FONT}" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="{CSS}">
+<link rel="stylesheet" href="{COMMUNITY_CSS}">
 <script src="{JS}"></script>{extra}
 </head>
-<body>
+<body{body_attr}>
 <svg class="defs" aria-hidden="true" focusable="false" width="0" height="0"><filter id="rough" x="-3%" y="-8%" width="106%" height="116%"><feTurbulence type="fractalNoise" baseFrequency="0.028" numOctaves="2" seed="7"/><feDisplacementMap in="SourceGraphic" scale="2.2" xChannelSelector="R" yChannelSelector="G"/></filter><filter id="rough-line" x="-2%" y="-2%" width="104%" height="104%"><feTurbulence type="fractalNoise" baseFrequency="0.02" numOctaves="2" seed="3"/><feDisplacementMap in="SourceGraphic" scale="2.4" xChannelSelector="R" yChannelSelector="G"/></filter></svg>
 <a class="skip" href="#main">Skip to content</a>
 """
 
 
-NAV = [("/download/", "Download")]
+NAV = [("/download/", "Download"), ("/community/", "Community")]
 
 
 def bar(current, over=False):
     links = []
-    for href, label in NAV[1:]:
+    for href, label in NAV:
         cur = ' aria-current="page"' if href == current else ""
         links.append(f'<a href="{href}"{cur}>{label}</a>')
-    if over:
-        links.append(f'<a class="open-source-nav" href="{GITHUB}" target="_blank" rel="noopener">Open source <span aria-hidden="true">↗</span></a>')
-    cur = ' aria-current="page"' if current == "/download/" else ""
+    links.append(f'<a class="github-nav" href="{GITHUB}">GitHub <span aria-hidden="true">↗</span></a>')
     return f"""<header class="bar{' bar-over' if over else ''}">
   <div class="bar-in">
     <a class="brand" href="/"><img src="/img/ink/mark.svg" alt="" width="36" height="36"><span>Lastbook</span></a>
-    <nav class="nav" aria-label="Main">
+    <nav class="nav community-nav" aria-label="Main">
       {chr(10).join("      " + l for l in links).strip()}
     </nav>
   </div>
@@ -122,6 +119,7 @@ FOOT = f"""<footer class="foot">
   <div class="wrap">
     <p class="foot-warn"><img src="/img/ink/d-bang-red.svg" alt="" width="30" height="30"><span><strong>Not clinically reviewed.</strong> Lastbook doesn’t replace trained care. In an emergency, call 911 if you can.</span></p>
     <p class="foot-links">
+      <a href="/community/">Community</a>
       <a href="/download/">Download</a>
       <a href="/library/">What’s in the library</a>
       <a href="/buying-guide/">Buying guide</a>
@@ -212,10 +210,81 @@ GRAIN = ('<svg class="grain" aria-hidden="true" focusable="false"><filter id="gr
          '<feColorMatrix values="0 0 0 0 .09  0 0 0 0 .08  0 0 0 0 .06  0 0 0 .5 0"/></filter><rect width="100%" height="100%" filter="url(#grain-f)"/></svg>')
 
 
+def media(story):
+    if "image" in story:
+        image = story["image"]
+        file = image["file"]
+        assert (ROOT / "img/community" / file).is_file(), file
+        note = image.get("attribution")
+        attribution = f'<span class="contribution-attribution">{html.escape(note)}</span>' if note else ""
+        return (
+            f'<div class="contribution-image contribution-{html.escape(image["focus"])}">'
+            f'<img src="/img/community/{html.escape(file)}" width="{int(image["width"])}"'
+            f' height="{int(image["height"])}" alt="{html.escape(image["alt"])}" loading="lazy">{attribution}</div>'
+        )
+    illustration = story["illustration"]
+    file = illustration["file"]
+    assert (ROOT / "img/ink" / file).is_file(), file
+    example = illustration.get("example")
+    caption = f'<span>{html.escape(example)}</span>' if example else ""
+    return (
+        f'<div class="contribution-image contribution-illustration tone-{html.escape(illustration["tone"])}"'
+        f' aria-hidden="true"><div><img src="/img/ink/{html.escape(file)}" width="88" height="88" alt="">'
+        f'{caption}</div></div>'
+    )
+
+
+def card(story, version):
+    return f'''      <article class="contribution" data-release="{version}">
+        {media(story)}
+        <div class="contribution-copy">
+          <h3>{html.escape(story["title"])}</h3>
+          <div class="contribution-meta">
+            <a class="contribution-credit" href="{GITHUB}/pull/{int(story["pr"])}">By {html.escape(story["credit"])} <span aria-hidden="true">↗</span></a>
+            <span class="contribution-version">{version}</span>
+          </div>
+        </div>
+      </article>'''
+
+
+def community_carousel():
+    groups = json.loads((ROOT / "data/community-release.json").read_text())["releases"]
+    groups.sort(key=lambda group: tuple(map(int, group["version"].split("."))), reverse=True)
+    versions = [group["version"] for group in groups]
+    if not groups or any(not re.fullmatch(r"\d+\.\d+\.\d+", v) for v in versions):
+        raise ValueError("Community highlights must have a valid release version")
+    released_version = MAC.rsplit("/", 1)[1].removeprefix("Lastbook-").removesuffix("-mac.dmg")
+    stories = "\n".join(card(item, group["version"]) for group in groups for item in group["highlights"])
+    options = "\n".join(
+        f'            <option value="{version}">{version}{" · Latest" if version == released_version else ""}</option>'
+        for version in versions
+    )
+    return f'''    <div class="release-carousel">
+      <div class="release-carousel-bar">
+        <div class="release-picker">
+          <select class="release-filter" aria-label="Filter contributions by release" hidden>
+            <option value="">All releases</option>
+{options}
+          </select>
+          <a class="release-notes-link" href="{GITHUB}/releases/tag/v{released_version}"><span class="release-notes-text">Latest release notes</span> <span aria-hidden="true">↗</span></a>
+        </div>
+        <div class="carousel-controls" hidden>
+          <button class="carousel-arrow" type="button" data-direction="-1" aria-label="Previous contribution" aria-controls="release-contributions"><span aria-hidden="true">←</span></button>
+          <button class="carousel-arrow" type="button" data-direction="1" aria-label="Next contribution" aria-controls="release-contributions"><span aria-hidden="true">→</span></button>
+        </div>
+      </div>
+      <div class="contribution-track" id="release-contributions" tabindex="0" role="group" aria-label="Community contributions by release">
+{stories}
+      </div>
+    </div>'''
+
+
+
 def home():
     return head("Lastbook — Everything you need to survive and rebuild society.",
                 "Free, open-source survival library with local AI, maps and how-to videos. Works offline after setup on Mac, Windows and Linux.",
-                "/", extra=f'\n<script src="{CROWD}" defer></script>') + bar("/", over=True) + f"""
+                "/", extra=f'\n<script src="{CROWD}" defer></script>\n<script src="{CAROUSEL_JS}" defer></script>',
+                body_class="community-home") + bar("/", over=True) + f"""
 <main id="main">
 
 <section class="hero" id="hero" aria-labelledby="h1">
@@ -233,23 +302,34 @@ def home():
     <h1 class="wm" id="h1"><span class="vh">Lastbook</span>
       {WORDMARK}
     </h1>
-    <p class="lead">Everything you need to survive and rebuild society.<br>Free, local, offline and private.<span class="phone-note"> It’s for Mac, Windows and Linux computers, not iPhone, iPad or Android. <strong>Open lastbook.org on your computer.</strong></span></p>
-    <div class="dl">
-      <div class="dl-item dl-mac"><a class="btn" href="{MAC}">{APPLE}<span>Download for Mac</span></a><p class="cap">28.6 MB · Apple M1 or newer · macOS 14+</p></div>
-      <div class="dl-item dl-win"><a class="btn-2" href="{WIN}">{WINDOWS}<span>Download for Windows</span></a><p class="cap">105 MB · Windows 10 or 11, 64-bit</p></div>
-      <div class="dl-item dl-linux"><a class="btn-2" href="{LINUX}">{BOX}<span>Download for Linux</span></a><p class="cap">Ubuntu 24.04 or 26.04 · Intel/AMD 64-bit</p></div>
-    </div>
-    <div class="hero-community">
-      <p>Open source. Built by the community.</p>
-      <a class="hero-github" href="{GITHUB}" target="_blank" rel="noopener" aria-label="Build with us on GitHub, {GITHUB_STARS:,} stars">
-        <img src="/img/github-mark.png" alt="" width="20" height="20">
-        <span class="hero-github-label">Build with us on GitHub</span>
-        <span class="hero-stars"><span aria-hidden="true">☆</span> {GITHUB_STARS:,}<span class="vh"> stars</span></span>
-        <span aria-hidden="true">↗</span>
+    <p class="launch-headline">Everything you need to survive<br class="headline-break"> and rebuild society. <span class="launch-byline">Built by the users.</span></p>
+    <p class="launch-description">Free, local, offline and private.</p>
+    <div class="launch-paths">
+      <div class="launch-downloads" role="group" aria-label="Download Lastbook">
+        <a class="launch-path launch-download" href="{MAC}" aria-label="Download for Mac">{APPLE}<span><span class="download-prefix">Download for </span>Mac</span></a>
+        <a class="launch-path launch-download" href="{WIN}" aria-label="Download for Windows">{WINDOWS}<span><span class="download-prefix">Download for </span>Windows</span></a>
+        <a class="launch-path launch-download" href="{LINUX}" aria-label="Download for Linux">{BOX}<span><span class="download-prefix">Download for </span>Linux</span></a>
+      </div>
+      <a class="launch-path launch-path-community" href="/community/">
+        <span class="path-copy"><strong>Help build Lastbook</strong><span>We're building Lastbook together. We need you.</span></span>
+        <span class="path-arrow" aria-hidden="true">→</span>
       </a>
     </div>
   </div>
 
+</section>
+
+<section class="sec community-stories" id="stories" aria-labelledby="stories-h">
+  <div class="wrap">
+    <div class="stories-intro">
+      <div>
+        <h2 id="stories-h">Built together.</h2>
+        <p>Every day, we ship a new build with work from the community.</p>
+      </div>
+      <a class="stories-link" href="/community/">Find a way to help <span aria-hidden="true">→</span></a>
+    </div>
+    {community_carousel()}
+  </div>
 </section>
 
 <section class="sec essentials" aria-labelledby="essentials-h">
@@ -278,20 +358,6 @@ def home():
       <article class="card"><h3>Power &amp; energy</h3><p>Generators, solar and electrical basics.</p></article>
       <article class="card"><h3>Emergency preparedness</h3><p>Plan for outages, disasters and evacuation.</p></article>
     </div>
-  </div>
-</section>
-
-<section class="sec community" aria-labelledby="community-h">
-  <div class="wrap">
-    <h2 id="community-h">Lastbook is open source.</h2>
-    <p class="lead">Help us improve it.</p>
-    <div class="community-grid">
-      <div><h3>Improve the app</h3><p>Code, design and accessibility.</p></div>
-      <div><h3>Grow the library</h3><p>Recommend resources and help review guides.</p></div>
-      <div><h3>Try it. Tell us.</h3><p>Report bugs and share what you need.</p></div>
-    </div>
-    <div class="community-actions"><a class="btn github-button" href="https://github.com/Immortal-Protocols/lastbook" target="_blank" rel="noopener" aria-label="GitHub"><img src="/img/github-lockup-white.svg" width="110" height="32" alt="GitHub"></a></div>
-    <img class="community-people" src="/img/ink/foot-crowd.svg" width="1080" height="200" alt="" loading="lazy">
   </div>
 </section>
 
@@ -340,6 +406,53 @@ def home():
 
 
 # ---------------------------------------------------------------- Download
+def community():
+    return head("Community", "Have an idea for Lastbook? Give your AI a prompt to help make the change and submit a pull request.",
+                "/community/", extra=f'\n<script src="{PROMPT_JS}" defer></script>') + bar("/community/") + """
+<main id="main">
+  <section class="community-welcome" aria-labelledby="welcome-h">
+    <div class="wrap prompt-wrap">
+      <h1 id="welcome-h">We're building Lastbook together. We need you.</h1>
+      <label class="prompt-instruction" for="contribution-prompt">Add your idea, then copy this prompt into your AI.</label>
+      <div class="prompt-card">
+        <textarea id="contribution-prompt" spellcheck="false" rows="7">Help me improve Lastbook.
+https://github.com/Immortal-Protocols/lastbook
+
+[Describe what you want to improve.]
+
+Read CONTRIBUTING.md. Make one focused change in a fork, run the relevant tests, and submit a pull request. Explain what changed and what you tested.</textarea>
+        <div class="prompt-actions">
+          <button class="btn btn-sm" id="copy-contribution-prompt" type="button" hidden>Copy prompt</button>
+          <span class="copy-status" id="copy-prompt-status" role="status"></span>
+        </div>
+      </div>
+    </div>
+  </section>
+  <nav class="wrap community-links" aria-label="Other ways to help">
+    <a href="https://github.com/Immortal-Protocols/lastbook/issues/new?template=bug_report.md">Report a bug <span aria-hidden="true">↗</span></a>
+    <a href="https://github.com/Immortal-Protocols/lastbook/issues/new?template=feature_request.md&amp;title=Library%20resource%3A%20">Suggest a resource <span aria-hidden="true">↗</span></a>
+    <a href="https://github.com/Immortal-Protocols/lastbook/blob/main/docs/MAPS.md">Help map your region <span aria-hidden="true">↗</span></a>
+    <a href="/#stories">See what contributors built <span aria-hidden="true">→</span></a>
+  </nav>
+</main>
+
+<footer class="foot">
+  <div class="wrap">
+    <p class="foot-links">
+      <a href="/">Home</a>
+      <a href="/download/">Download</a>
+      <a href="/library/">What’s in the library</a>
+      <a href="/privacy/">Privacy</a>
+      <a href="/credits/">Credits and licences</a>
+      <a href="mailto:hello@lastbook.org">hello@lastbook.org</a>
+    </p>
+  </div>
+</footer>
+</body>
+</html>
+"""
+
+
 def download():
     return head("Download", "Download Lastbook for Mac, Windows or Linux. Setup downloads your library, local map and optional local AI.", "/download/") + bar("/download/") + f"""
 <main id="main" class="page"><div class="wrap">
@@ -650,6 +763,7 @@ def write(rel, text):
 
 if __name__ == "__main__":
     write("index.html", home())
+    write("community/index.html", community())
     # file names may break inside their grey chip; the other UI names stay whole
     write("download/index.html", re.sub(r'<b>(Lastbook[-.][^<]*)</b>', r'<b class="f">\1</b>', download()))
     write("library/index.html", library())

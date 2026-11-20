@@ -28,17 +28,21 @@
 <meta name="twitter:image:alt" content="Lastbook — Everything you need to survive and rebuild society.">
 <link rel="preload" href="/fonts/Nunito-Variable.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/style.css?v=cac0405468">
+<link rel="stylesheet" href="/community.css?v=2a361390ed">
 <script src="/os.js?v=940e747a6e"></script>
-<script src="/crowd.js?v=f8ea5a4467" defer></script>
+<script src="/crowd.js?v=8c85170b37" defer></script>
+<script src="/community-carousel.js?v=c69d962c60" defer></script>
 </head>
-<body>
+<body class="community-home">
 <svg class="defs" aria-hidden="true" focusable="false" width="0" height="0"><filter id="rough" x="-3%" y="-8%" width="106%" height="116%"><feTurbulence type="fractalNoise" baseFrequency="0.028" numOctaves="2" seed="7"/><feDisplacementMap in="SourceGraphic" scale="2.2" xChannelSelector="R" yChannelSelector="G"/></filter><filter id="rough-line" x="-2%" y="-2%" width="104%" height="104%"><feTurbulence type="fractalNoise" baseFrequency="0.02" numOctaves="2" seed="3"/><feDisplacementMap in="SourceGraphic" scale="2.4" xChannelSelector="R" yChannelSelector="G"/></filter></svg>
 <a class="skip" href="#main">Skip to content</a>
 <header class="bar bar-over">
   <div class="bar-in">
     <a class="brand" href="/"><img src="/img/ink/mark.svg" alt="" width="36" height="36"><span>Lastbook</span></a>
-    <nav class="nav" aria-label="Main">
-      <a class="open-source-nav" href="https://github.com/Immortal-Protocols/lastbook" target="_blank" rel="noopener">Open source <span aria-hidden="true">↗</span></a>
+    <nav class="nav community-nav" aria-label="Main">
+      <a href="/download/">Download</a>
+      <a href="/community/">Community</a>
+      <a class="github-nav" href="https://github.com/Immortal-Protocols/lastbook">GitHub <span aria-hidden="true">↗</span></a>
     </nav>
   </div>
 </header>
@@ -91,23 +95,342 @@
 </g>
 </svg>
     </h1>
-    <p class="lead">Everything you need to survive and rebuild society.<br>Free, local, offline and private.<span class="phone-note"> It’s for Mac, Windows and Linux computers, not iPhone, iPad or Android. <strong>Open lastbook.org on your computer.</strong></span></p>
-    <div class="dl">
-      <div class="dl-item dl-mac"><a class="btn" href="https://downloads.lastbook.org/Lastbook-1.1.13-mac.dmg"><svg aria-hidden="true" viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M16.4 12.6c0-2.6 2.1-3.8 2.2-3.9-1.2-1.8-3.1-2-3.7-2-1.6-.2-3.1.9-3.9.9-.8 0-2-.9-3.4-.9-1.7 0-3.3 1-4.2 2.6-1.8 3.1-.5 7.7 1.3 10.2.9 1.2 1.9 2.6 3.2 2.6 1.3-.1 1.8-.8 3.3-.8 1.6 0 2 .8 3.4.8 1.4 0 2.3-1.3 3.1-2.5 1-1.4 1.4-2.8 1.4-2.9 0 0-2.7-1-2.7-4.1ZM13.9 5c.7-.9 1.2-2.1 1.1-3.3-1 0-2.3.7-3 1.6-.7.8-1.2 2-1.1 3.2 1.2.1 2.3-.6 3-1.5Z"/></svg><span>Download for Mac</span></a><p class="cap">28.6 MB · Apple M1 or newer · macOS 14+</p></div>
-      <div class="dl-item dl-win"><a class="btn-2" href="https://downloads.lastbook.org/Lastbook-1.1.13-Setup.exe"><svg aria-hidden="true" viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M2 4.3 10 3.2v7.7H2Zm9-1.2L22 1.5v9.4H11ZM2 12h8v7.8l-8-1.1Zm9 0h11v9.5l-11-1.5Z"/></svg><span>Download for Windows</span></a><p class="cap">105 MB · Windows 10 or 11, 64-bit</p></div>
-      <div class="dl-item dl-linux"><a class="btn-2" href="/download/#linux"><svg aria-hidden="true" viewBox="0 0 24 24" width="22" height="22"><path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round" d="M4 7.5 12 3l8 4.5v9L12 21l-8-4.5Zm0 0 8 4.5 8-4.5M12 12v9"/></svg><span>Download for Linux</span></a><p class="cap">Ubuntu 24.04 or 26.04 · Intel/AMD 64-bit</p></div>
-    </div>
-    <div class="hero-community">
-      <p>Open source. Built by the community.</p>
-      <a class="hero-github" href="https://github.com/Immortal-Protocols/lastbook" target="_blank" rel="noopener" aria-label="Build with us on GitHub, 748 stars">
-        <img src="/img/github-mark.png" alt="" width="20" height="20">
-        <span class="hero-github-label">Build with us on GitHub</span>
-        <span class="hero-stars"><span aria-hidden="true">☆</span> 748<span class="vh"> stars</span></span>
-        <span aria-hidden="true">↗</span>
+    <p class="launch-headline">Everything you need to survive<br class="headline-break"> and rebuild society. <span class="launch-byline">Built by the users.</span></p>
+    <p class="launch-description">Free, local, offline and private.</p>
+    <div class="launch-paths">
+      <div class="launch-downloads" role="group" aria-label="Download Lastbook">
+        <a class="launch-path launch-download" href="https://downloads.lastbook.org/Lastbook-1.1.13-mac.dmg" aria-label="Download for Mac"><svg aria-hidden="true" viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M16.4 12.6c0-2.6 2.1-3.8 2.2-3.9-1.2-1.8-3.1-2-3.7-2-1.6-.2-3.1.9-3.9.9-.8 0-2-.9-3.4-.9-1.7 0-3.3 1-4.2 2.6-1.8 3.1-.5 7.7 1.3 10.2.9 1.2 1.9 2.6 3.2 2.6 1.3-.1 1.8-.8 3.3-.8 1.6 0 2 .8 3.4.8 1.4 0 2.3-1.3 3.1-2.5 1-1.4 1.4-2.8 1.4-2.9 0 0-2.7-1-2.7-4.1ZM13.9 5c.7-.9 1.2-2.1 1.1-3.3-1 0-2.3.7-3 1.6-.7.8-1.2 2-1.1 3.2 1.2.1 2.3-.6 3-1.5Z"/></svg><span><span class="download-prefix">Download for </span>Mac</span></a>
+        <a class="launch-path launch-download" href="https://downloads.lastbook.org/Lastbook-1.1.13-Setup.exe" aria-label="Download for Windows"><svg aria-hidden="true" viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M2 4.3 10 3.2v7.7H2Zm9-1.2L22 1.5v9.4H11ZM2 12h8v7.8l-8-1.1Zm9 0h11v9.5l-11-1.5Z"/></svg><span><span class="download-prefix">Download for </span>Windows</span></a>
+        <a class="launch-path launch-download" href="/download/#linux" aria-label="Download for Linux"><svg aria-hidden="true" viewBox="0 0 24 24" width="22" height="22"><path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round" d="M4 7.5 12 3l8 4.5v9L12 21l-8-4.5Zm0 0 8 4.5 8-4.5M12 12v9"/></svg><span><span class="download-prefix">Download for </span>Linux</span></a>
+      </div>
+      <a class="launch-path launch-path-community" href="/community/">
+        <span class="path-copy"><strong>Help build Lastbook</strong><span>We're building Lastbook together. We need you.</span></span>
+        <span class="path-arrow" aria-hidden="true">→</span>
       </a>
     </div>
   </div>
 
+</section>
+
+<section class="sec community-stories" id="stories" aria-labelledby="stories-h">
+  <div class="wrap">
+    <div class="stories-intro">
+      <div>
+        <h2 id="stories-h">Built together.</h2>
+        <p>Every day, we ship a new build with work from the community.</p>
+      </div>
+      <a class="stories-link" href="/community/">Find a way to help <span aria-hidden="true">→</span></a>
+    </div>
+        <div class="release-carousel">
+      <div class="release-carousel-bar">
+        <div class="release-picker">
+          <select class="release-filter" aria-label="Filter contributions by release" hidden>
+            <option value="">All releases</option>
+            <option value="1.1.13">1.1.13 · Latest</option>
+            <option value="1.1.12">1.1.12</option>
+            <option value="1.1.11">1.1.11</option>
+          </select>
+          <a class="release-notes-link" href="https://github.com/Immortal-Protocols/lastbook/releases/tag/v1.1.13"><span class="release-notes-text">Latest release notes</span> <span aria-hidden="true">↗</span></a>
+        </div>
+        <div class="carousel-controls" hidden>
+          <button class="carousel-arrow" type="button" data-direction="-1" aria-label="Previous contribution" aria-controls="release-contributions"><span aria-hidden="true">←</span></button>
+          <button class="carousel-arrow" type="button" data-direction="1" aria-label="Next contribution" aria-controls="release-contributions"><span aria-hidden="true">→</span></button>
+        </div>
+      </div>
+      <div class="contribution-track" id="release-contributions" tabindex="0" role="group" aria-label="Community contributions by release">
+      <article class="contribution" data-release="1.1.13">
+        <div class="contribution-image contribution-chat-home"><img src="/img/community/chat-home-1.1.13.png" width="1290" height="915" alt="Lastbook’s new Chat screen with its question box and illustration." loading="lazy"></div>
+        <div class="contribution-copy">
+          <h3>A simpler first screen for Chat</h3>
+          <div class="contribution-meta">
+            <a class="contribution-credit" href="https://github.com/Immortal-Protocols/lastbook/pull/162">By Ryzord Solutions <span aria-hidden="true">↗</span></a>
+            <span class="contribution-version">1.1.13</span>
+          </div>
+        </div>
+      </article>
+      <article class="contribution" data-release="1.1.13">
+        <div class="contribution-image contribution-illustration tone-sage" aria-hidden="true"><div><img src="/img/ink/fig-reader.svg" width="88" height="88" alt=""></div></div>
+        <div class="contribution-copy">
+          <h3>Search offline encyclopedias from Chat</h3>
+          <div class="contribution-meta">
+            <a class="contribution-credit" href="https://github.com/Immortal-Protocols/lastbook/pull/243">By @nexdotworks <span aria-hidden="true">↗</span></a>
+            <span class="contribution-version">1.1.13</span>
+          </div>
+        </div>
+      </article>
+      <article class="contribution" data-release="1.1.13">
+        <div class="contribution-image contribution-mac-setup"><img src="/img/community/mac-setup-1.1.13.png" width="2560" height="1720" alt="Lastbook’s Mac Setup screen showing available storage separately from memory." loading="lazy"></div>
+        <div class="contribution-copy">
+          <h3>Mac Setup counts space like Finder</h3>
+          <div class="contribution-meta">
+            <a class="contribution-credit" href="https://github.com/Immortal-Protocols/lastbook/pull/131">By Matt Gennings <span aria-hidden="true">↗</span></a>
+            <span class="contribution-version">1.1.13</span>
+          </div>
+        </div>
+      </article>
+      <article class="contribution" data-release="1.1.13">
+        <div class="contribution-image contribution-illustration tone-gold" aria-hidden="true"><div><img src="/img/ink/d-tick.svg" width="88" height="88" alt=""></div></div>
+        <div class="contribution-copy">
+          <h3>Chat reads tables row by row</h3>
+          <div class="contribution-meta">
+            <a class="contribution-credit" href="https://github.com/Immortal-Protocols/lastbook/pull/178">By Airye <span aria-hidden="true">↗</span></a>
+            <span class="contribution-version">1.1.13</span>
+          </div>
+        </div>
+      </article>
+      <article class="contribution" data-release="1.1.13">
+        <div class="contribution-image contribution-illustration tone-mist" aria-hidden="true"><div><img src="/img/ink/fig-aid.svg" width="88" height="88" alt=""></div></div>
+        <div class="contribution-copy">
+          <h3>“Not breathing” finds urgent help first</h3>
+          <div class="contribution-meta">
+            <a class="contribution-credit" href="https://github.com/Immortal-Protocols/lastbook/pull/167">By @sarzgit <span aria-hidden="true">↗</span></a>
+            <span class="contribution-version">1.1.13</span>
+          </div>
+        </div>
+      </article>
+      <article class="contribution" data-release="1.1.13">
+        <div class="contribution-image contribution-illustration tone-gold" aria-hidden="true"><div><img src="/img/ink/t-aid.svg" width="88" height="88" alt=""></div></div>
+        <div class="contribution-copy">
+          <h3>Find guides for AEDs and heart attacks</h3>
+          <div class="contribution-meta">
+            <a class="contribution-credit" href="https://github.com/Immortal-Protocols/lastbook/pull/183">By Jon Komet <span aria-hidden="true">↗</span></a>
+            <span class="contribution-version">1.1.13</span>
+          </div>
+        </div>
+      </article>
+      <article class="contribution" data-release="1.1.13">
+        <div class="contribution-image contribution-illustration tone-sage" aria-hidden="true"><div><img src="/img/ink/p-magnifier.svg" width="88" height="88" alt=""><span>“loadshedding”</span></div></div>
+        <div class="contribution-copy">
+          <h3>Guide search understands Pakistani terms</h3>
+          <div class="contribution-meta">
+            <a class="contribution-credit" href="https://github.com/Immortal-Protocols/lastbook/pull/98">By @ahmedasad89-design <span aria-hidden="true">↗</span></a>
+            <span class="contribution-version">1.1.13</span>
+          </div>
+        </div>
+      </article>
+      <article class="contribution" data-release="1.1.13">
+        <div class="contribution-image contribution-illustration tone-mist" aria-hidden="true"><div><img src="/img/ink/fig-lantern.svg" width="88" height="88" alt=""></div></div>
+        <div class="contribution-copy">
+          <h3>Find the freezing and house fire guides</h3>
+          <div class="contribution-meta">
+            <a class="contribution-credit" href="https://github.com/Immortal-Protocols/lastbook/pull/239">By Seb the Canadian <span aria-hidden="true">↗</span></a>
+            <span class="contribution-version">1.1.13</span>
+          </div>
+        </div>
+      </article>
+      <article class="contribution" data-release="1.1.13">
+        <div class="contribution-image contribution-illustration tone-gold" aria-hidden="true"><div><img src="/img/ink/fig-laptop.svg" width="88" height="88" alt=""></div></div>
+        <div class="contribution-copy">
+          <h3>Cleaner video transcripts that keep numbers</h3>
+          <div class="contribution-meta">
+            <a class="contribution-credit" href="https://github.com/Immortal-Protocols/lastbook/pull/256">By @TheTradoor <span aria-hidden="true">↗</span></a>
+            <span class="contribution-version">1.1.13</span>
+          </div>
+        </div>
+      </article>
+      <article class="contribution" data-release="1.1.13">
+        <div class="contribution-image contribution-illustration tone-sage" aria-hidden="true"><div><img src="/img/ink/p-envelope.svg" width="88" height="88" alt=""></div></div>
+        <div class="contribution-copy">
+          <h3>Address search handles Ct and NE</h3>
+          <div class="contribution-meta">
+            <a class="contribution-credit" href="https://github.com/Immortal-Protocols/lastbook/pull/211">By @vb12341 <span aria-hidden="true">↗</span></a>
+            <span class="contribution-version">1.1.13</span>
+          </div>
+        </div>
+      </article>
+      <article class="contribution" data-release="1.1.13">
+        <div class="contribution-image contribution-illustration tone-mist" aria-hidden="true"><div><img src="/img/ink/d-plus.svg" width="88" height="88" alt=""></div></div>
+        <div class="contribution-copy">
+          <h3>Linux detects shared memory on Apple silicon</h3>
+          <div class="contribution-meta">
+            <a class="contribution-credit" href="https://github.com/Immortal-Protocols/lastbook/pull/105">By @joshuaswarren <span aria-hidden="true">↗</span></a>
+            <span class="contribution-version">1.1.13</span>
+          </div>
+        </div>
+      </article>
+      <article class="contribution" data-release="1.1.13">
+        <div class="contribution-image contribution-illustration tone-gold" aria-hidden="true"><div><img src="/img/ink/d-box.svg" width="88" height="88" alt=""></div></div>
+        <div class="contribution-copy">
+          <h3>See where Lastbook looks for your files</h3>
+          <div class="contribution-meta">
+            <a class="contribution-credit" href="https://github.com/Immortal-Protocols/lastbook/pull/206">By Johnathan Bevers <span aria-hidden="true">↗</span></a>
+            <span class="contribution-version">1.1.13</span>
+          </div>
+        </div>
+      </article>
+      <article class="contribution" data-release="1.1.12">
+        <div class="contribution-image contribution-video"><img src="/img/community/playback-speed.png" width="1440" height="900" alt="Playback speed set to 1.25× in Lastbook." loading="lazy"></div>
+        <div class="contribution-copy">
+          <h3>Videos at your own pace</h3>
+          <div class="contribution-meta">
+            <a class="contribution-credit" href="https://github.com/Immortal-Protocols/lastbook/pull/132">By Mohammad Ali Sayyed <span aria-hidden="true">↗</span></a>
+            <span class="contribution-version">1.1.12</span>
+          </div>
+        </div>
+      </article>
+      <article class="contribution" data-release="1.1.12">
+        <div class="contribution-image contribution-guides"><img src="/img/community/guides-sidebar.jpg" width="1280" height="860" alt="Guides selected below Chat in the sidebar." loading="lazy"></div>
+        <div class="contribution-copy">
+          <h3>Guides one click away</h3>
+          <div class="contribution-meta">
+            <a class="contribution-credit" href="https://github.com/Immortal-Protocols/lastbook/pull/110">By Gonzalo Fuentes <span aria-hidden="true">↗</span></a>
+            <span class="contribution-version">1.1.12</span>
+          </div>
+        </div>
+      </article>
+      <article class="contribution" data-release="1.1.12">
+        <div class="contribution-image contribution-table"><img src="/img/community/chat-table.png" width="1288" height="870" alt="Chat showing compass bearings in a table with a source citation." loading="lazy"></div>
+        <div class="contribution-copy">
+          <h3>Readable tables in Chat</h3>
+          <div class="contribution-meta">
+            <a class="contribution-credit" href="https://github.com/Immortal-Protocols/lastbook/pull/69">By Ryzord Solutions <span aria-hidden="true">↗</span></a>
+            <span class="contribution-version">1.1.12</span>
+          </div>
+        </div>
+      </article>
+      <article class="contribution" data-release="1.1.12">
+        <div class="contribution-image contribution-illustration tone-gold" aria-hidden="true"><div><img src="/img/ink/d-zip.svg" width="88" height="88" alt=""></div></div>
+        <div class="contribution-copy">
+          <h3>Better downloads for big libraries</h3>
+          <div class="contribution-meta">
+            <a class="contribution-credit" href="https://github.com/Immortal-Protocols/lastbook/pull/125">By @alexlanghart <span aria-hidden="true">↗</span></a>
+            <span class="contribution-version">1.1.12</span>
+          </div>
+        </div>
+      </article>
+      <article class="contribution" data-release="1.1.12">
+        <div class="contribution-image contribution-illustration tone-sage" aria-hidden="true"><div><img src="/img/ink/p-magnifier.svg" width="88" height="88" alt=""><span>“hydro is out”</span></div></div>
+        <div class="contribution-copy">
+          <h3>Guide search recognizes Canadian terms</h3>
+          <div class="contribution-meta">
+            <a class="contribution-credit" href="https://github.com/Immortal-Protocols/lastbook/pull/145">By Seb the Canadian <span aria-hidden="true">↗</span></a>
+            <span class="contribution-version">1.1.12</span>
+          </div>
+        </div>
+      </article>
+      <article class="contribution" data-release="1.1.12">
+        <div class="contribution-image contribution-illustration tone-mist" aria-hidden="true"><div><img src="/img/ink/fig-laptop.svg" width="88" height="88" alt=""></div></div>
+        <div class="contribution-copy">
+          <h3>Setup waits out busy servers</h3>
+          <div class="contribution-meta">
+            <a class="contribution-credit" href="https://github.com/Immortal-Protocols/lastbook/pull/149">By @verata-veritatis <span aria-hidden="true">↗</span></a>
+            <span class="contribution-version">1.1.12</span>
+          </div>
+        </div>
+      </article>
+      <article class="contribution" data-release="1.1.12">
+        <div class="contribution-image contribution-illustration tone-mist" aria-hidden="true"><div><img src="/img/ink/p-envelope.svg" width="88" height="88" alt=""></div></div>
+        <div class="contribution-copy">
+          <h3>Search addresses with ZIP+4</h3>
+          <div class="contribution-meta">
+            <a class="contribution-credit" href="https://github.com/Immortal-Protocols/lastbook/pull/121">By @A-Corner <span aria-hidden="true">↗</span></a>
+            <span class="contribution-version">1.1.12</span>
+          </div>
+        </div>
+      </article>
+      <article class="contribution" data-release="1.1.12">
+        <div class="contribution-image contribution-illustration tone-sage" aria-hidden="true"><div><img src="/img/ink/d-tick.svg" width="88" height="88" alt=""></div></div>
+        <div class="contribution-copy">
+          <h3>Keep your map through Repair</h3>
+          <div class="contribution-meta">
+            <a class="contribution-credit" href="https://github.com/Immortal-Protocols/lastbook/pull/88">By Gonzalo Fuentes <span aria-hidden="true">↗</span></a>
+            <span class="contribution-version">1.1.12</span>
+          </div>
+        </div>
+      </article>
+      <article class="contribution" data-release="1.1.12">
+        <div class="contribution-image contribution-illustration tone-gold" aria-hidden="true"><div><img src="/img/ink/d-bang.svg" width="88" height="88" alt=""></div></div>
+        <div class="contribution-copy">
+          <h3>Find warnings written in capitals</h3>
+          <div class="contribution-meta">
+            <a class="contribution-credit" href="https://github.com/Immortal-Protocols/lastbook/pull/76">By @Lutif <span aria-hidden="true">↗</span></a>
+            <span class="contribution-version">1.1.12</span>
+          </div>
+        </div>
+      </article>
+      <article class="contribution" data-release="1.1.11">
+        <div class="contribution-image contribution-settings"><img src="/img/community/sidebar-1.1.11.png" width="485" height="338" alt="Settings and About at the bottom of the Lastbook sidebar." loading="lazy"></div>
+        <div class="contribution-copy">
+          <h3>Settings and About in the sidebar</h3>
+          <div class="contribution-meta">
+            <a class="contribution-credit" href="https://github.com/Immortal-Protocols/lastbook/pull/67">By Ryzord Solutions <span aria-hidden="true">↗</span></a>
+            <span class="contribution-version">1.1.11</span>
+          </div>
+        </div>
+      </article>
+      <article class="contribution" data-release="1.1.11">
+        <div class="contribution-image contribution-dentists"><img src="/img/community/dentists.png" width="1450" height="960" alt="The Dentists layer selected on Lastbook’s Rhode Island map." loading="lazy"><span class="contribution-attribution">© OpenStreetMap contributors</span></div>
+        <div class="contribution-copy">
+          <h3>Find a dentist offline</h3>
+          <div class="contribution-meta">
+            <a class="contribution-credit" href="https://github.com/Immortal-Protocols/lastbook/pull/27">By @okburkard1 <span aria-hidden="true">↗</span></a>
+            <span class="contribution-version">1.1.11</span>
+          </div>
+        </div>
+      </article>
+      <article class="contribution" data-release="1.1.11">
+        <div class="contribution-image contribution-storm"><img src="/img/community/storm-guides-1.1.11.png" width="857" height="369" alt="Three storm choices in Lastbook’s disaster guide." loading="lazy"></div>
+        <div class="contribution-copy">
+          <h3>Guides for hurricanes, tornadoes and thunderstorms</h3>
+          <div class="contribution-meta">
+            <a class="contribution-credit" href="https://github.com/Immortal-Protocols/lastbook/pull/65">By @wgl444 <span aria-hidden="true">↗</span></a>
+            <span class="contribution-version">1.1.11</span>
+          </div>
+        </div>
+      </article>
+      <article class="contribution" data-release="1.1.11">
+        <div class="contribution-image contribution-illustration tone-gold" aria-hidden="true"><div><img src="/img/ink/fig-lantern.svg" width="88" height="88" alt=""></div></div>
+        <div class="contribution-copy">
+          <h3>Apartment and high-rise guides</h3>
+          <div class="contribution-meta">
+            <a class="contribution-credit" href="https://github.com/Immortal-Protocols/lastbook/pull/47">By Conner <span aria-hidden="true">↗</span></a>
+            <span class="contribution-version">1.1.11</span>
+          </div>
+        </div>
+      </article>
+      <article class="contribution" data-release="1.1.11">
+        <div class="contribution-image contribution-illustration tone-sage" aria-hidden="true"><div><img src="/img/ink/p-magnifier.svg" width="88" height="88" alt=""></div></div>
+        <div class="contribution-copy">
+          <h3>Search recognizes “torch” and “rubbish”</h3>
+          <div class="contribution-meta">
+            <a class="contribution-credit" href="https://github.com/Immortal-Protocols/lastbook/pull/55">By Johnathan Bevers <span aria-hidden="true">↗</span></a>
+            <span class="contribution-version">1.1.11</span>
+          </div>
+        </div>
+      </article>
+      <article class="contribution" data-release="1.1.11">
+        <div class="contribution-image contribution-illustration tone-mist" aria-hidden="true"><div><img src="/img/ink/p-magnifier.svg" width="88" height="88" alt=""></div></div>
+        <div class="contribution-copy">
+          <h3>Guide search recognizes terms used in India</h3>
+          <div class="contribution-meta">
+            <a class="contribution-credit" href="https://github.com/Immortal-Protocols/lastbook/pull/61">By @deepanshu-chauhan-delphic <span aria-hidden="true">↗</span></a>
+            <span class="contribution-version">1.1.11</span>
+          </div>
+        </div>
+      </article>
+      <article class="contribution" data-release="1.1.11">
+        <div class="contribution-image contribution-illustration tone-gold" aria-hidden="true"><div><img src="/img/ink/fig-aid.svg" width="88" height="88" alt=""></div></div>
+        <div class="contribution-copy">
+          <h3>A heat exhaustion video in First Aid</h3>
+          <div class="contribution-meta">
+            <a class="contribution-credit" href="https://github.com/Immortal-Protocols/lastbook/pull/45">By @sarzgit <span aria-hidden="true">↗</span></a>
+            <span class="contribution-version">1.1.11</span>
+          </div>
+        </div>
+      </article>
+      <article class="contribution" data-release="1.1.11">
+        <div class="contribution-image contribution-illustration tone-sage" aria-hidden="true"><div><img src="/img/ink/fig-laptop.svg" width="88" height="88" alt=""></div></div>
+        <div class="contribution-copy">
+          <h3>Videos explain why a format can’t play</h3>
+          <div class="contribution-meta">
+            <a class="contribution-credit" href="https://github.com/Immortal-Protocols/lastbook/pull/56">By Johnathan Bevers <span aria-hidden="true">↗</span></a>
+            <span class="contribution-version">1.1.11</span>
+          </div>
+        </div>
+      </article>
+      </div>
+    </div>
+  </div>
 </section>
 
 <section class="sec essentials" aria-labelledby="essentials-h">
@@ -136,20 +459,6 @@
       <article class="card"><h3>Power &amp; energy</h3><p>Generators, solar and electrical basics.</p></article>
       <article class="card"><h3>Emergency preparedness</h3><p>Plan for outages, disasters and evacuation.</p></article>
     </div>
-  </div>
-</section>
-
-<section class="sec community" aria-labelledby="community-h">
-  <div class="wrap">
-    <h2 id="community-h">Lastbook is open source.</h2>
-    <p class="lead">Help us improve it.</p>
-    <div class="community-grid">
-      <div><h3>Improve the app</h3><p>Code, design and accessibility.</p></div>
-      <div><h3>Grow the library</h3><p>Recommend resources and help review guides.</p></div>
-      <div><h3>Try it. Tell us.</h3><p>Report bugs and share what you need.</p></div>
-    </div>
-    <div class="community-actions"><a class="btn github-button" href="https://github.com/Immortal-Protocols/lastbook" target="_blank" rel="noopener" aria-label="GitHub"><img src="/img/github-lockup-white.svg" width="110" height="32" alt="GitHub"></a></div>
-    <img class="community-people" src="/img/ink/foot-crowd.svg" width="1080" height="200" alt="" loading="lazy">
   </div>
 </section>
 
@@ -212,6 +521,7 @@
   <div class="wrap">
     <p class="foot-warn"><img src="/img/ink/d-bang-red.svg" alt="" width="30" height="30"><span><strong>Not clinically reviewed.</strong> Lastbook doesn’t replace trained care. In an emergency, call 911 if you can.</span></p>
     <p class="foot-links">
+      <a href="/community/">Community</a>
       <a href="/download/">Download</a>
       <a href="/library/">What’s in the library</a>
       <a href="/buying-guide/">Buying guide</a>

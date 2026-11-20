@@ -384,9 +384,9 @@
   function disasterSky(p, W, H, G, now, still) {
     if (!G || W < 760) return;
     var top = G.top + 18;
-    var floor = Math.min(H * .29, G.y + 65);
+    // Keep room for the skyline when the hero uses a compact layout.
+    var floor = Math.max(top + 100, Math.min(H * .29, G.y + 65));
     var height = floor - top;
-    if (height < 100) return;
     var t = still ? 12 : (now / 1000) % 26;
     var meteorPaths = [[.43,.23],[.57,.81],[.04,.29],[.96,.67],[.31,.12]];
     var path = meteorPaths[still ? 0 : Math.floor(now / 26000) % meteorPaths.length];
@@ -578,7 +578,7 @@
     var hero = document.getElementById("hero"), r = hero.getBoundingClientRect(), wm = document.querySelector(".wm-svg").getBoundingClientRect(),
       c = document.getElementById("centre").getBoundingClientRect(), bar = document.querySelector(".bar").getBoundingClientRect();
     var W = r.width, H = r.height, phone = W < 760, rs = [], tx = [];
-    [].forEach.call(document.querySelectorAll("#centre .wm-svg,#centre .lead,#centre .phone-note,#centre .dl-item,#centre .then,#centre .hero-community,.hero-foot p,.bar-in>*"), function (el) {
+    [].forEach.call(document.querySelectorAll("#centre .wm-svg,#centre .lead,#centre .phone-note,#centre .dl-item,#centre .then,#centre .hero-community,#centre .launch-headline,#centre .launch-description,#centre .launch-path,.hero-foot p,.bar-in>*"), function (el) {
       var q = el.getBoundingClientRect(); if (!q.width) return;
       var b = [q.left - r.left - 16, q.top - r.top - 16, q.right - r.left + 16, q.bottom - r.top + 10];
       rs.push(b); if (!el.classList.contains("wm-svg")) tx.push(b);

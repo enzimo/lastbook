@@ -1,0 +1,344 @@
+{
+  "releases": [
+    {
+      "version": "1.1.13",
+      "highlights": [
+        {
+          "pr": 162,
+          "title": "A simpler first screen for Chat",
+          "credit": "Ryzord Solutions",
+          "handle": "ryzordsolutions",
+          "image": {
+            "file": "chat-home-1.1.13.png",
+            "alt": "Lastbook’s new Chat screen with its question box and illustration.",
+            "width": 1290,
+            "height": 915,
+            "focus": "chat-home"
+          }
+        },
+        {
+          "pr": 243,
+          "title": "Search offline encyclopedias from Chat",
+          "credit": "@nexdotworks",
+          "handle": "nexdotworks",
+          "illustration": {
+            "file": "fig-reader.svg",
+            "tone": "sage"
+          }
+        },
+        {
+          "pr": 131,
+          "title": "Mac Setup counts space like Finder",
+          "credit": "Matt Gennings",
+          "handle": "mgennings",
+          "image": {
+            "file": "mac-setup-1.1.13.png",
+            "alt": "Lastbook’s Mac Setup screen showing available storage separately from memory.",
+            "width": 2560,
+            "height": 1720,
+            "focus": "mac-setup"
+          }
+        },
+        {
+          "pr": 178,
+          "title": "Chat reads tables row by row",
+          "credit": "Airye",
+          "handle": "STAirye",
+          "illustration": {
+            "file": "d-tick.svg",
+            "tone": "gold"
+          }
+        },
+        {
+          "pr": 167,
+          "title": "“Not breathing” finds urgent help first",
+          "credit": "@sarzgit",
+          "handle": "sarzgit",
+          "illustration": {
+            "file": "fig-aid.svg",
+            "tone": "mist"
+          }
+        },
+        {
+          "pr": 183,
+          "title": "Find guides for AEDs and heart attacks",
+          "credit": "Jon Komet",
+          "handle": "abundantbeing",
+          "illustration": {
+            "file": "t-aid.svg",
+            "tone": "gold"
+          }
+        },
+        {
+          "pr": 98,
+          "title": "Guide search understands Pakistani terms",
+          "credit": "@ahmedasad89-design",
+          "handle": "ahmedasad89-design",
+          "illustration": {
+            "file": "p-magnifier.svg",
+            "tone": "sage",
+            "example": "“loadshedding”"
+          }
+        },
+        {
+          "pr": 239,
+          "title": "Find the freezing and house fire guides",
+          "credit": "Seb the Canadian",
+          "handle": "Seb-the-Canadian",
+          "illustration": {
+            "file": "fig-lantern.svg",
+            "tone": "mist"
+          }
+        },
+        {
+          "pr": 256,
+          "title": "Cleaner video transcripts that keep numbers",
+          "credit": "@TheTradoor",
+          "handle": "TheTradoor",
+          "illustration": {
+            "file": "fig-laptop.svg",
+            "tone": "gold"
+          }
+        },
+        {
+          "pr": 211,
+          "title": "Address search handles Ct and NE",
+          "credit": "@vb12341",
+          "handle": "vb12341",
+          "illustration": {
+            "file": "p-envelope.svg",
+            "tone": "sage"
+          }
+        },
+        {
+          "pr": 105,
+          "title": "Linux detects shared memory on Apple silicon",
+          "credit": "@joshuaswarren",
+          "handle": "joshuaswarren",
+          "illustration": {
+            "file": "d-plus.svg",
+            "tone": "mist"
+          }
+        },
+        {
+          "pr": 206,
+          "title": "See where Lastbook looks for your files",
+          "credit": "Johnathan Bevers",
+          "handle": "JohnathanBevers",
+          "illustration": {
+            "file": "d-box.svg",
+            "tone": "gold"
+          }
+        }
+      ]
+    },
+    {
+      "version": "1.1.12",
+      "highlights": [
+        {
+          "pr": 132,
+          "title": "Videos at your own pace",
+          "credit": "Mohammad Ali Sayyed",
+          "handle": "MohammadAli06",
+          "image": {
+            "file": "playback-speed.png",
+            "alt": "Playback speed set to 1.25× in Lastbook.",
+            "width": 1440,
+            "height": 900,
+            "focus": "video"
+          }
+        },
+        {
+          "pr": 110,
+          "title": "Guides one click away",
+          "credit": "Gonzalo Fuentes",
+          "handle": "GonzaloFuentes28",
+          "image": {
+            "file": "guides-sidebar.jpg",
+            "alt": "Guides selected below Chat in the sidebar.",
+            "width": 1280,
+            "height": 860,
+            "focus": "guides"
+          }
+        },
+        {
+          "pr": 69,
+          "title": "Readable tables in Chat",
+          "credit": "Ryzord Solutions",
+          "handle": "ryzordsolutions",
+          "image": {
+            "file": "chat-table.png",
+            "alt": "Chat showing compass bearings in a table with a source citation.",
+            "width": 1288,
+            "height": 870,
+            "focus": "table"
+          }
+        },
+        {
+          "pr": 125,
+          "title": "Better downloads for big libraries",
+          "credit": "@alexlanghart",
+          "handle": "alexlanghart",
+          "illustration": {
+            "file": "d-zip.svg",
+            "tone": "gold"
+          }
+        },
+        {
+          "pr": 145,
+          "title": "Guide search recognizes Canadian terms",
+          "credit": "Seb the Canadian",
+          "handle": "Seb-the-Canadian",
+          "illustration": {
+            "file": "p-magnifier.svg",
+            "tone": "sage",
+            "example": "“hydro is out”"
+          }
+        },
+        {
+          "pr": 149,
+          "title": "Setup waits out busy servers",
+          "credit": "@verata-veritatis",
+          "handle": "verata-veritatis",
+          "illustration": {
+            "file": "fig-laptop.svg",
+            "tone": "mist"
+          }
+        },
+        {
+          "pr": 121,
+          "title": "Search addresses with ZIP+4",
+          "credit": "@A-Corner",
+          "handle": "A-Corner",
+          "illustration": {
+            "file": "p-envelope.svg",
+            "tone": "mist"
+          }
+        },
+        {
+          "pr": 88,
+          "title": "Keep your map through Repair",
+          "credit": "Gonzalo Fuentes",
+          "handle": "GonzaloFuentes28",
+          "illustration": {
+            "file": "d-tick.svg",
+            "tone": "sage"
+          }
+        },
+        {
+          "pr": 76,
+          "title": "Find warnings written in capitals",
+          "credit": "@Lutif",
+          "handle": "Lutif",
+          "illustration": {
+            "file": "d-bang.svg",
+            "tone": "gold"
+          }
+        }
+      ]
+    },
+    {
+      "version": "1.1.11",
+      "highlights": [
+        {
+          "pr": 67,
+          "title": "Settings and About in the sidebar",
+          "credit": "Ryzord Solutions",
+          "handle": "ryzordsolutions",
+          "image": {
+            "file": "sidebar-1.1.11.png",
+            "alt": "Settings and About at the bottom of the Lastbook sidebar.",
+            "width": 485,
+            "height": 338,
+            "focus": "settings"
+          },
+          "release_note": "Settings and About in the sidebar"
+        },
+        {
+          "pr": 27,
+          "title": "Find a dentist offline",
+          "credit": "@okburkard1",
+          "handle": "okburkard1",
+          "image": {
+            "file": "dentists.png",
+            "alt": "The Dentists layer selected on Lastbook’s Rhode Island map.",
+            "width": 1450,
+            "height": 960,
+            "focus": "dentists",
+            "attribution": "© OpenStreetMap contributors"
+          },
+          "release_note": "Dentists on the map"
+        },
+        {
+          "pr": 65,
+          "title": "Guides for hurricanes, tornadoes and thunderstorms",
+          "credit": "@wgl444",
+          "handle": "wgl444",
+          "image": {
+            "file": "storm-guides-1.1.11.png",
+            "alt": "Three storm choices in Lastbook’s disaster guide.",
+            "width": 857,
+            "height": 369,
+            "focus": "storm"
+          },
+          "release_note": "Storm guides"
+        },
+        {
+          "pr": 47,
+          "title": "Apartment and high-rise guides",
+          "credit": "Conner",
+          "handle": "ConProgramming",
+          "illustration": {
+            "file": "fig-lantern.svg",
+            "tone": "gold"
+          },
+          "release_note": "Living in a city"
+        },
+        {
+          "pr": 55,
+          "title": "Search recognizes “torch” and “rubbish”",
+          "credit": "Johnathan Bevers",
+          "handle": "JohnathanBevers",
+          "illustration": {
+            "file": "p-magnifier.svg",
+            "tone": "sage"
+          },
+          "release_note": "words used outside the US"
+        },
+        {
+          "pr": 61,
+          "title": "Guide search recognizes terms used in India",
+          "credit": "@deepanshu-chauhan-delphic",
+          "handle": "deepanshu-chauhan-delphic",
+          "illustration": {
+            "file": "p-magnifier.svg",
+            "tone": "mist"
+          },
+          "release_note": "words used in India"
+        },
+        {
+          "pr": 45,
+          "title": "A heat exhaustion video in First Aid",
+          "credit": "@sarzgit",
+          "handle": "sarzgit",
+          "illustration": {
+            "file": "fig-aid.svg",
+            "tone": "gold"
+          },
+          "release_note": "Heat exhaustion video"
+        },
+        {
+          "pr": 56,
+          "title": "Videos explain why a format can’t play",
+          "credit": "Johnathan Bevers",
+          "handle": "JohnathanBevers",
+          "illustration": {
+            "file": "fig-laptop.svg",
+            "tone": "sage"
+          },
+          "release_note": "Videos that can't play now say why"
+        }
+      ]
+    }
+  ]
+}
