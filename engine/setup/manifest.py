@@ -126,11 +126,16 @@ def merge(bundled, fetched):
 class Manifest:
     """The bundled manifest at once; a fetched one replaces it when it arrives and is newer or the same date."""
 
-    def __init__(self, bundled=None, remote=REMOTE, allowed=None, context=None):
-        self.current = bundled or load_bundled()
+    def __init__(self, bundled=None, remote=REMOTE, allowed=None, context=None, models=True):
+        """models=False: the local AI is never offered (the web service, which uses an AI host elsewhere, if any)."""
+        self.models = models
+        self.current = self._offered(bundled or load_bundled())
         self.source = 'bundled'
         self.remote, self.allowed, self.context = remote, allowed, context
         self.fetching = None
+
+    def _offered(self, m):
+        return m if self.models else {**m, 'models': []}
 
     def fetch_once(self):
         if self.fetching or not self.remote:
@@ -147,7 +152,7 @@ class Manifest:
         except ValueError:
             m = None
         if m:      # merge() keeps every pinned entry, so a fetched copy can only add or mark available, whatever its date
-            self.current, self.source = merge(self.current, m), 'fetched'
+            self.current, self.source = self._offered(merge(self.current, m)), 'fetched'
 
     def pack(self, pid):
         return next((p for p in self.current['packs'] if p['id'] == pid), None)

@@ -1,0 +1,15 @@
+# The web service image (packaging/docker/Dockerfile) copies only what server.py needs; keep the build context small.
+*
+!server.py
+!assistant.py
+!retrieval.py
+!LICENSE
+!THIRD_PARTY_NOTICES.md
+!engine/
+engine/vendor-macos/
+!web/
+!content/
+!packaging/docker/
+**/__pycache__/
+**/*.pyc
+**/.DS_Store

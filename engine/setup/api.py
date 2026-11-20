@@ -7,6 +7,9 @@ Two ways in, one module:
     server.py gets a manage-mode Setup on first use, with no relaunch (finish then answers restart: true).
 
 Only requests from this computer get an answer (the bridge's, or loopback): a phone the guide is shared with gets 403.
+The exception is the web service (server.py with LASTBOOK_REMOTE_SETUP=1, docs/WEB-SERVICE.md): there every request comes through
+a reverse proxy, so server.py marks a request that holds the access key (h.remote_setup_ok) after its Host and Origin checks.
+Such a request may not name folders or files on the server, and is never offered the local AI.
 """
 import hashlib
 import json
@@ -1275,17 +1278,22 @@ def configure(**kw):
     return SETUP
 
 
+def default_settings():
+    """The app's own settings folder, where setup keeps its job and a staged switch. LASTBOOK_SETTINGS names another."""
+    if os.environ.get('LASTBOOK_SETTINGS'):
+        return Path(os.environ['LASTBOOK_SETTINGS'])
+    if sys.platform == 'win32':
+        return Path(os.environ.get('APPDATA') or Path.home() / 'AppData' / 'Roaming') / 'Lastbook'
+    if sys.platform.startswith('linux'):
+        return Path(os.environ.get('XDG_CONFIG_HOME') or Path.home() / '.config') / 'Lastbook'
+    return Path.home() / 'Library' / 'Application Support' / 'Lastbook'
+
+
 def _default():
     global SETUP
     if SETUP is None:
         from engine import paths
-        if sys.platform == 'win32':
-            settings = Path(os.environ.get('APPDATA') or Path.home() / 'AppData' / 'Roaming') / 'Lastbook'
-        elif sys.platform.startswith('linux'):
-            settings = Path(os.environ.get('XDG_CONFIG_HOME') or Path.home() / '.config') / 'Lastbook'
-        else:
-            settings = Path.home() / 'Library' / 'Application Support' / 'Lastbook'
-        SETUP = Setup('manage', settings, paths.DATA, current=paths.DATA)
+        SETUP = Setup('manage', default_settings(), paths.DATA, current=paths.DATA)
     return SETUP
 
 
@@ -1316,14 +1324,20 @@ def _send_json(h, obj, status=200):
         h.wfile.write(data)
 
 
+REMOTE_REFUSED = {'use', 'pick', 'remove-ai'}    # they name or open files and folders on the server, or are about the local AI
+
+
 def handle(h, method, path):
     """Answers one /api/setup/ request on a BaseHTTPRequestHandler h."""
-    if h.client_address[0] not in ('127.0.0.1', '::1', '::ffff:127.0.0.1'):
+    local = h.client_address[0] in ('127.0.0.1', '::1', '::ffff:127.0.0.1')
+    if not local and getattr(h, 'remote_setup_ok', False) is not True:
         return _send_json(h, {'error': 'Setup is only open on this computer.'}, 403)
     name = path[len('/api/setup/'):].strip('/')
     fn = ROUTES.get(('GET' if method == 'HEAD' else method, name))
     if not fn:
         return _send_json(h, {'error': 'not found'}, 404)
+    if not local and name in REMOTE_REFUSED:
+        return _send_json(h, {'error': 'This is done on the server itself, not from a browser.', 'code': 'remote'}, 403)
     body = {}
     if method == 'POST':
         try:
@@ -1335,6 +1349,9 @@ def handle(h, method, path):
                 raise ValueError
         except ValueError:
             return _send_json(h, {'error': 'bad request'}, 400)
+    if not local:
+        body.pop('folder', None)     # always the server's own data folder
+        body['ai'] = False
     try:
         out = fn(SETUP or _default(), body)
     except Exception as e:
