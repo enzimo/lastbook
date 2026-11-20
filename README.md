@@ -3,8 +3,9 @@
 > **This is enzimo's fork of [Immortal-Protocols/lastbook](https://github.com/Immortal-Protocols/lastbook).** It adds a web
 > service: `server.py` behind a reverse proxy with allowed host names, browser setup for whoever holds the access key, and an
 > OpenAI-compatible AI host elsewhere. See [docs/WEB-SERVICE.md](docs/WEB-SERVICE.md). The image is published as
-> `ghcr.io/enzimo/lastbook` (`latest`, or `sha-<commit>` to pin). Everything else follows upstream, which is merged in from
-> time to time; report problems with the desktop apps upstream.
+> `ghcr.io/enzimo/lastbook` (`latest`, or `sha-<commit>` to pin). Everything else follows upstream: a daily workflow
+> (`.github/workflows/sync-upstream.yml`) merges it, tests it and publishes a new image, and opens an issue when it needs a
+> hand. Report problems with the desktop apps upstream.
 
 Lastbook is an offline survival library for Mac, Windows and Linux. It puts manuals, videos, encyclopedias, an offline map and
 short practical guides on one computer. After setup, it works offline. The desktop sidebar opens Videos, Map and Chat.

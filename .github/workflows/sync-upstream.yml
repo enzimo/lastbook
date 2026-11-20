@@ -1,0 +1,114 @@
+# Keeps this fork's main up to date with Immortal-Protocols/lastbook: once a day (and on demand) it merges upstream's main,
+# runs the unit tests on the result, pushes it, and starts docker.yml to publish a new image.
+#
+# It stops without pushing, and opens (or comments on) an issue labelled upstream-sync, when:
+#   - the merge has conflicts with this fork's changes,
+#   - the tests fail on the merged code, or
+#   - the push is refused. Upstream changing files under .github/workflows does that: the workflow token may not push them.
+# Merge those by hand (README: the fork note), and the next run carries on from there.
+name: Sync upstream
+
+on:
+  schedule:
+    - cron: '17 9 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+  issues: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+env:
+  UPSTREAM: https://github.com/Immortal-Protocols/lastbook.git
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Fetch upstream
+        id: fetch
+        run: |
+          git remote add upstream "$UPSTREAM"
+          git fetch --no-tags upstream main
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "Already up to date with upstream $(git rev-parse --short upstream/main)."
+            echo "new=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Upstream has $(git rev-list --count HEAD..upstream/main) new commit(s)."
+            echo "new=true" >> "$GITHUB_OUTPUT"
+            echo "upstream=$(git rev-parse --short upstream/main)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Merge
+        id: merge
+        if: steps.fetch.outputs.new == 'true'
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if ! git merge --no-ff upstream/main -m "Merge upstream Immortal-Protocols/lastbook main (${{ steps.fetch.outputs.upstream }})"; then
+            git diff --name-only --diff-filter=U > "$RUNNER_TEMP/conflicts.txt"
+            git merge --abort
+            echo "Merge conflicts in:"; cat "$RUNNER_TEMP/conflicts.txt"
+            exit 1
+          fi
+
+      - uses: actions/setup-python@v7
+        if: steps.fetch.outputs.new == 'true'
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: packaging/docker/requirements.txt
+
+      - name: Unit tests on the merged code
+        id: tests
+        if: steps.fetch.outputs.new == 'true'
+        run: |
+          pip install -r packaging/docker/requirements.txt
+          .github/scripts/unit-tests.sh
+
+      - name: Push
+        id: push
+        if: steps.fetch.outputs.new == 'true'
+        run: git push origin HEAD:main
+
+      - name: Publish the image
+        if: steps.fetch.outputs.new == 'true'
+        # A push with the workflow token starts no workflows; a workflow_dispatch does.
+        run: gh workflow run docker.yml --repo "$GITHUB_REPOSITORY" --ref main
+
+      - name: Report a failed sync
+        if: failure() && steps.fetch.outputs.new == 'true'
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          UPSTREAM_SHA: ${{ steps.fetch.outputs.upstream }}
+          MERGE: ${{ steps.merge.outcome }}
+          TESTS: ${{ steps.tests.outcome }}
+          PUSH: ${{ steps.push.outcome }}
+        run: |
+          if [ "$MERGE" = failure ]; then
+            why="The merge has conflicts with this fork's changes, in:"$'\n\n'"$(sed 's/^/- `/; s/$/`/' "$RUNNER_TEMP/conflicts.txt" 2>/dev/null)"
+          elif [ "$TESTS" = failure ]; then
+            why="The unit tests fail on the merged code. Nothing was pushed."
+          elif [ "$PUSH" = failure ]; then
+            why="The push was refused. Upstream probably changed files under \`.github/workflows\`, which the workflow token may not push."
+          else
+            why="A step failed after the merge; see the run."
+          fi
+          body="Upstream \`$UPSTREAM_SHA\` could not be merged into \`main\` automatically."$'\n\n'"$why"$'\n\n'"Run: $RUN_URL"$'\n\n'"To merge by hand: \`git fetch upstream && git merge upstream/main\`, run \`.github/scripts/unit-tests.sh\`, push. The next scheduled run closes nothing by itself; close this issue when \`main\` has the merge."
+          gh label create upstream-sync --color FBCA04 --description "Automatic upstream merge needs a hand" 2>/dev/null || true
+          n=$(gh issue list --repo "$GITHUB_REPOSITORY" --label upstream-sync --state open --json number --jq '.[0].number')
+          if [ -n "$n" ]; then
+            gh issue comment "$n" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --label upstream-sync --title "Upstream sync needs a manual merge" --body "$body"
+          fi
