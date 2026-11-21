@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""retrieval.readable(): which passages reach meaning-based search. No library, no model, no server.
+"""retrieval.readable(): which passages reach meaning-based search, and scores(): how they are scored. No library, no model, no server.
 
   python3 -B -m unittest app.tests.test_readable
 """
@@ -18,7 +18,7 @@ def load():
     sys.modules['onnxruntime'] = None  # importing it now raises ImportError: no model is loaded or needed here
     try:
         import retrieval
-        return retrieval.chunks_of, retrieval.readable
+        return retrieval.chunks_of, retrieval.readable, getattr(retrieval, 'scores', None)
     finally:
         sys.path.remove(str(ROOT))
         for name in set(sys.modules) - set(before):
@@ -32,7 +32,7 @@ def load():
         os.environ.update(env)
 
 
-chunks_of, readable = load()
+chunks_of, readable, scores = load()
 
 WARNING = ('Do not drink water from a well that has been flooded. Boil it for one minute before you use it, '
            'and store it in clean containers with a tight lid.')
@@ -61,6 +61,19 @@ class Readable(unittest.TestCase):
 
     def test_chunks_keep_capitals(self):
         self.assertTrue(chunks_of(WARNING.upper()))
+
+
+class Scores(unittest.TestCase):
+    def test_float16_rows_are_scored_in_float32(self):
+        """The stored vectors are float16, but the products are taken in float32: numpy's float16 product is slow and
+        rounds enough to swap near-tied passages. Rows that are not a multiple of the block are scored too."""
+        import numpy as np
+        rng = np.random.default_rng(1)
+        mat = rng.standard_normal((10_001, 384)).astype(np.float16)
+        q = rng.standard_normal(384).astype(np.float32)
+        got = scores(mat, q, block=4096)
+        self.assertEqual(got.dtype, np.float32)
+        np.testing.assert_allclose(got, mat.astype(np.float32) @ q, rtol=0, atol=1e-4)
 
 
 if __name__ == '__main__':

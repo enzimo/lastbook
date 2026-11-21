@@ -479,6 +479,11 @@ details.more>.body{padding:0 12px 14px}
 .row b{display:block;font-size:16px;line-height:1.3;font-weight:650}
 .row small{display:block;color:var(--ink2);font-size:14.5px;line-height:1.38}
 .row:hover b{text-decoration:underline}
+.list>li.row:first-child{border-top:0}
+.row.nf>span:nth-child(2){flex:1;min-width:0;overflow-wrap:anywhere}
+.row.nf .btn{flex:none}
+.btn.danger{background:var(--stop);border-color:var(--stop);color:var(--bg)}
+.row.nf:hover b{text-decoration:none}
 
 /* ---------- reader ---------- */
 .rtop{display:flex;gap:10px;align-items:center;justify-content:space-between}

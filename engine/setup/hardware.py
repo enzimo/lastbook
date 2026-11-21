@@ -4,6 +4,7 @@ import ctypes
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -231,6 +232,69 @@ def disk_name(path):
     return None
 
 
+FAT = {'vfat', 'msdos', 'fat', 'fat12', 'fat16', 'fat32'}     # file systems that cannot hold a file of 4 GB or more
+
+
+def _unescape_mount(s):
+    """mountinfo writes a space in a mount point as \\040 (and tab, newline and backslash likewise)."""
+    return re.sub(r'\\([0-7]{3})', lambda m: chr(int(m.group(1), 8)), s)
+
+
+def _linux_fs_type(path, mountinfo='/proc/self/mountinfo'):
+    """The file system type of the mount that holds path, from mountinfo (the longest mount point that contains it)."""
+    want = os.path.realpath(path)
+    best, kind = None, None
+    try:
+        lines = Path(mountinfo).read_text(encoding='utf-8', errors='replace').splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        left, sep, right = line.partition(' - ')
+        fields = left.split()
+        if not sep or len(fields) < 5 or not right.split():
+            continue
+        mp = _unescape_mount(fields[4])
+        inside = want == mp or want.startswith(mp.rstrip('/') + '/')
+        if inside and (best is None or len(mp) > len(best)):
+            best, kind = mp, right.split()[0]
+    return kind
+
+
+def _windows_fs_type(path):
+    root = os.path.splitdrive(os.path.abspath(path))[0] + '\\'
+    name = ctypes.create_unicode_buffer(64)
+    ok = ctypes.windll.kernel32.GetVolumeInformationW(ctypes.c_wchar_p(root), None, 0, None, None, None, name, len(name))
+    return name.value if ok else None
+
+
+def fs_type(path):
+    """The file system that holds path ('ext4', 'exfat', 'vfat', 'NTFS', 'FAT32'…), or None where this cannot tell (macOS for now:
+    a file too large for FAT there fails as it is written, with EFBIG). Read only; nothing is mounted or changed."""
+    try:
+        if sys.platform.startswith('linux'):
+            return _linux_fs_type(path)
+        if sys.platform == 'win32':
+            return _windows_fs_type(path)
+    except Exception:
+        return None
+    return None
+
+
+def cluster_size(path):
+    """The smallest space a file takes on the drive that holds path, in bytes (exFAT on a large drive: often 128 KB), or None."""
+    try:
+        if sys.platform == 'win32':
+            spc, bps, free, total = (ctypes.c_ulong() for _ in range(4))
+            root = os.path.splitdrive(os.path.abspath(path))[0] + '\\'
+            if ctypes.windll.kernel32.GetDiskFreeSpaceW(ctypes.c_wchar_p(root), ctypes.byref(spc), ctypes.byref(bps), ctypes.byref(free), ctypes.byref(total)):
+                return spc.value * bps.value or None
+            return None
+        st = os.statvfs(path)
+        return st.f_frsize or st.f_bsize or None
+    except (OSError, AttributeError, ValueError):
+        return None
+
+
 def candidate_disks(extra=()):
     """Disk capacity for app-owned or explicitly selected paths only."""
     places = list(map(Path, extra))
@@ -299,7 +363,8 @@ def measure_ai(llm_local, model_path, timeout=180):
 
 
 # ----------------------------------------------------------------------------------------------------------- battery --
-# Read only when asked, from files; nothing is kept. Linux first (#119): Mac and Windows readers can follow once they can be tried.
+# Read only when asked; nothing is kept. Linux from files (#119), a Mac from IOKit's power sources. Windows can follow once it
+# can be tried.
 POWER_SUPPLY = '/sys/class/power_supply'
 EXTERNAL = ('Mains', 'USB', 'USB_C', 'USB_PD', 'USB_PD_DRP', 'BrickID', 'Wireless')   # power_supply types that power the computer
 LONGEST = 7 * 24 * 3600     # a time left beyond a week is a counter that has not settled: not shown
@@ -361,12 +426,84 @@ def linux_battery(root=POWER_SUPPLY):
             'seconds_left': seconds if seconds is not None and 0 < seconds <= LONGEST else None, 'batteries': len(batteries)}
 
 
+def _cf_value(cf, ref):
+    """A CoreFoundation string, number or boolean as Python's; anything else as None."""
+    kind = cf.CFGetTypeID(ref)
+    if kind == cf.CFBooleanGetTypeID():
+        return bool(cf.CFBooleanGetValue(ref))
+    if kind == cf.CFNumberGetTypeID():
+        v = ctypes.c_double(0)
+        if not cf.CFNumberGetValue(ref, 13, ctypes.byref(v)):       # kCFNumberDoubleType
+            return None
+        return int(v.value) if v.value == int(v.value) else v.value
+    if kind == cf.CFStringGetTypeID():
+        buf = ctypes.create_string_buffer(1024)
+        return buf.value.decode('utf-8', 'replace') if cf.CFStringGetCString(ref, buf, len(buf), 0x08000100) else None   # UTF-8
+    return None
+
+
+def mac_power_sources():
+    """What macOS says of each power source, as a list of plain dicts, through IOKit (IOPSCopyPowerSourcesInfo): the same
+    reading the menu bar shows. No subprocess and no file. [] when the Mac reports none (a desktop)."""
+    cf = ctypes.CDLL('/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation')
+    iokit = ctypes.CDLL('/System/Library/Frameworks/IOKit.framework/IOKit')
+    ref, index = ctypes.c_void_p, ctypes.c_long
+    for lib, name, res, args in ((iokit, 'IOPSCopyPowerSourcesInfo', ref, []), (iokit, 'IOPSCopyPowerSourcesList', ref, [ref]),
+                                 (iokit, 'IOPSGetPowerSourceDescription', ref, [ref, ref]), (cf, 'CFRelease', None, [ref]),
+                                 (cf, 'CFArrayGetCount', index, [ref]), (cf, 'CFArrayGetValueAtIndex', ref, [ref, index]),
+                                 (cf, 'CFDictionaryGetCount', index, [ref]), (cf, 'CFDictionaryGetKeysAndValues', None, [ref, ctypes.c_void_p, ctypes.c_void_p]),
+                                 (cf, 'CFGetTypeID', ctypes.c_ulong, [ref]), (cf, 'CFStringGetTypeID', ctypes.c_ulong, []),
+                                 (cf, 'CFNumberGetTypeID', ctypes.c_ulong, []), (cf, 'CFBooleanGetTypeID', ctypes.c_ulong, []),
+                                 (cf, 'CFBooleanGetValue', ctypes.c_ubyte, [ref]), (cf, 'CFNumberGetValue', ctypes.c_ubyte, [ref, index, ctypes.c_void_p]),
+                                 (cf, 'CFStringGetCString', ctypes.c_ubyte, [ref, ctypes.c_char_p, index, ctypes.c_uint32])):
+        fn = getattr(lib, name)
+        fn.restype, fn.argtypes = res, args
+    info = iokit.IOPSCopyPowerSourcesInfo()
+    if not info:
+        return []
+    sources = iokit.IOPSCopyPowerSourcesList(info)
+    out = []
+    try:
+        for i in range(cf.CFArrayGetCount(sources) if sources else 0):
+            d = iokit.IOPSGetPowerSourceDescription(info, cf.CFArrayGetValueAtIndex(sources, i))   # borrowed: not ours to release
+            if not d:
+                continue
+            n = cf.CFDictionaryGetCount(d)
+            keys, values = (ctypes.c_void_p * n)(), (ctypes.c_void_p * n)()
+            cf.CFDictionaryGetKeysAndValues(d, keys, values)
+            out.append({_cf_value(cf, keys[j]): _cf_value(cf, values[j]) for j in range(n)})
+    finally:
+        if sources:
+            cf.CFRelease(sources)
+        cf.CFRelease(info)
+    return out
+
+
+def mac_battery(sources=None):
+    """This Mac's own battery from mac_power_sources(), in linux_battery's shape, or None when it has none (a desktop; a UPS
+    is not the computer's battery). macOS gives the charge as a percentage and the time left in minutes, -1 while it is still
+    working that out: then seconds_left is None, not a guess."""
+    sources = mac_power_sources() if sources is None else sources
+    own = [s for s in sources if s.get('Type') == 'InternalBattery' and s.get('Is Present') is not False]
+    if not own:
+        return None
+    now = sum(s['Current Capacity'] for s in own if isinstance(s.get('Current Capacity'), (int, float)) and s.get('Max Capacity'))
+    full = sum(s['Max Capacity'] for s in own if isinstance(s.get('Current Capacity'), (int, float)) and s.get('Max Capacity'))
+    on_battery = any(s.get('Power Source State') == 'Battery Power' for s in own)
+    minutes = [s.get('Time to Empty') for s in own]
+    seconds = sum(minutes) * 60 if on_battery and all(isinstance(m, (int, float)) and m > 0 for m in minutes) else None
+    return {'on_battery': on_battery, 'charging': not on_battery and any(s.get('Is Charging') is True for s in own),
+            'percent': max(0, min(100, round(100 * now / full))) if full > 0 else None,
+            'seconds_left': seconds if seconds is not None and 0 < seconds <= LONGEST else None, 'batteries': len(own)}
+
+
 def battery():
-    """{supported, battery}: battery as linux_battery gives it, or None. Only Linux is read so far."""
-    if os_name() != 'linux':
+    """{supported, battery}: battery as linux_battery or mac_battery gives it, or None. Windows is not read yet."""
+    read = {'linux': linux_battery, 'macos': mac_battery}.get(os_name())
+    if not read:
         return {'supported': False, 'battery': None}
     try:
-        return {'supported': True, 'battery': linux_battery()}
+        return {'supported': True, 'battery': read()}
     except Exception as e:      # a strange driver must not break the page that asked
         print('battery:', type(e).__name__, e, flush=True)
         return {'supported': True, 'battery': None}

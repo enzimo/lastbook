@@ -1,4 +1,4 @@
-# The packaged Linux app (packaging/linux/build_app_linux.sh): wheels for Ubuntu's own python3 (3.12 on 24.04, 3.14 on 26.04), x86_64, installed into
+# The packaged Linux app (packaging/linux/build_app_linux.sh): wheels for Ubuntu's own python3 (3.12 on 24.04, 3.14 on 26.04, 3.13 on Debian 13), x86_64, installed into
 # /opt/lastbook/lib. The window comes from the system: python3-gi, GTK 3 and WebKitGTK 4.1 (the .deb depends on them), never from here.
 # Same set as the Mac build: keyword search only, no onnxruntime or tokenizers, no pywebview.
 # Below 4: libzim 4.0.0 renamed getResults and getEstimatedMatches, which engine/library.py calls.

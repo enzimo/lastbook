@@ -101,6 +101,45 @@ class LinuxBattery(unittest.TestCase):
         self.assertEqual(self.s.read()['percent'], 100)
 
 
+def mac(**over):
+    """One internal battery as IOPSGetPowerSourceDescription describes it on a MacBook, with some values changed."""
+    return {'Type': 'InternalBattery', 'Transport Type': 'Internal', 'Name': 'InternalBattery-0', 'Is Present': True,
+            'Power Source State': 'Battery Power', 'Is Charging': False, 'Current Capacity': 80, 'Max Capacity': 100,
+            'Time to Empty': 240, 'Time to Full Charge': 0, **over}
+
+
+class MacBattery(unittest.TestCase):
+    """mac_battery's reading of what macOS reports. The IOKit call itself (mac_power_sources) only runs on a Mac."""
+
+    def test_laptop_on_battery(self):
+        self.assertEqual(hardware.mac_battery([mac()]),
+                         {'on_battery': True, 'charging': False, 'percent': 80, 'seconds_left': 240 * 60, 'batteries': 1})
+
+    def test_charging_on_mains(self):
+        got = hardware.mac_battery([mac(**{'Power Source State': 'AC Power', 'Is Charging': True, 'Current Capacity': 55,
+                                           'Time to Empty': 0, 'Time to Full Charge': 70})])
+        self.assertEqual(got, {'on_battery': False, 'charging': True, 'percent': 55, 'seconds_left': None, 'batteries': 1})
+
+    def test_full_on_mains(self):
+        got = hardware.mac_battery([mac(**{'Power Source State': 'AC Power', 'Current Capacity': 100, 'Time to Empty': 0, 'Is Charged': True})])
+        self.assertEqual(got, {'on_battery': False, 'charging': False, 'percent': 100, 'seconds_left': None, 'batteries': 1})
+
+    def test_no_time_left_while_macos_is_still_working_it_out(self):
+        for minutes in (-1, 0, None, 8 * 24 * 60):         # -1 is macOS's "calculating"; more than a week is not a reading
+            with self.subTest(minutes=minutes):
+                self.assertIsNone(hardware.mac_battery([mac(**{'Time to Empty': minutes})])['seconds_left'])
+
+    def test_no_battery_of_its_own(self):
+        self.assertIsNone(hardware.mac_battery([]))                                          # a desktop Mac
+        self.assertIsNone(hardware.mac_battery([mac(Type='UPS', **{'Transport Type': 'USB'})]))   # a UPS is not the computer's battery
+        self.assertIsNone(hardware.mac_battery([mac(**{'Is Present': False})]))
+
+    def test_capacity_not_in_percent_and_missing(self):
+        self.assertEqual(hardware.mac_battery([mac(**{'Current Capacity': 2600, 'Max Capacity': 5200})])['percent'], 50)   # mAh on an older Mac
+        self.assertIsNone(hardware.mac_battery([mac(**{'Current Capacity': None})])['percent'])
+        self.assertEqual(hardware.mac_battery([mac(**{'Current Capacity': 140})])['percent'], 100)
+
+
 class Route(unittest.TestCase):
     class H:
         def __init__(self, ip):
@@ -121,8 +160,12 @@ class Route(unittest.TestCase):
             h = self.H('127.0.0.1')
             hardware.handle_battery(h)
         self.assertEqual((h.status, json.loads(h.wfile.getvalue())), (200, {'supported': True, 'battery': fake}))
-        with mock.patch.object(hardware, 'os_name', return_value='macos'):
-            self.assertEqual(hardware.battery(), {'supported': False, 'battery': None})   # Mac and Windows readers come later
+        with mock.patch.object(hardware, 'os_name', return_value='windows'):
+            self.assertEqual(hardware.battery(), {'supported': False, 'battery': None})   # the Windows reader comes later
+        with mock.patch.object(hardware, 'os_name', return_value='macos'), mock.patch.object(hardware, 'mac_battery', return_value=fake):
+            self.assertEqual(hardware.battery(), {'supported': True, 'battery': fake})
+        with mock.patch.object(hardware, 'os_name', return_value='macos'), mock.patch.object(hardware, 'mac_power_sources', side_effect=OSError('no IOKit')):
+            self.assertEqual(hardware.battery(), {'supported': True, 'battery': None})
         with mock.patch.object(hardware, 'os_name', return_value='linux'), mock.patch.object(hardware, 'linux_battery', side_effect=OSError('odd driver')):
             self.assertEqual(hardware.battery(), {'supported': True, 'battery': None})     # a strange driver breaks nothing
 

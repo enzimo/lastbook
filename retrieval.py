@@ -97,6 +97,16 @@ def readable(text):
 COMMON = set('the a an of to and in is are be for on with as by or that this it from at not can if your you use when should may will water have has which all but more they their each must after before into out other than any one two do does'.split())
 
 
+def scores(mat, qv, block=4096):
+    """mat (float16 rows) times qv, in float32. numpy has no fast float16 product; turning a block of rows into float32
+    at a time is over ten times faster than mat @ qv and adds only one block of memory."""
+    qv = np.asarray(qv, dtype=np.float32)
+    out = np.empty(len(mat), dtype=np.float32)
+    for i in range(0, len(mat), block):
+        out[i:i + block] = mat[i:i + block].astype(np.float32) @ qv
+    return out
+
+
 def chunks_of(text):
     text = norm_ws(text)
     if len(text) < MINLEN:
@@ -428,29 +438,33 @@ class Index:
     def semantic(self, q, k=60, allowed=None, floor=0.55):
         if not self.emb or self.mat is None or not len(self.mat):
             return []
-        qv = self.emb.embed([QUERY_PREFIX + q])[0].astype(np.float16)
+        qv = self.emb.embed([QUERY_PREFIX + q])[0]
         with self.lock:
             m, act = self.mat, self.active
-            s = (m @ qv).astype(np.float32)
+            s = scores(m, qv)
             s[~act[:len(s)]] = -1
-        top = np.argpartition(-s, min(k * 3, len(s) - 1))[:k * 3]
+        top = np.nonzero(s >= floor)[0]  # everything above the floor, best first: filtering by allowed happens before any cut
         top = top[np.argsort(-s[top])]
         db = self._ro()
         excl = self.excluded()
-        out = []
-        for i in top:
-            row = one(db, 'SELECT doc_id,page,t,text FROM chunk WHERE id=?', (int(i) + 1,))
-            if not row or row[0] in excl:
-                continue
-            if allowed and not allowed(row[0]):
-                continue
-            if float(s[i]) < floor:
-                break
-            if not readable(row[3]):  # indexed before the quality filter existed
-                continue
-            out.append({'doc_id': row[0], 'page': row[1], 't': row[2], 'text': row[3], 'sem': float(s[i])})
-            if len(out) >= k:
-                break
+        out, seen = [], {}
+        for b in range(0, len(top), 500):  # doc ids in batches, text only for what survives the filters
+            ids = [int(i) + 1 for i in top[b:b + 500]]
+            docs = dict(db.execute(f"SELECT id,doc_id FROM chunk WHERE id IN ({','.join('?' * len(ids))})", ids).fetchall())
+            for i in top[b:b + 500]:
+                d = docs.get(int(i) + 1)
+                if d is None or d in excl:
+                    continue
+                if d not in seen:
+                    seen[d] = not allowed or bool(allowed(d))
+                if not seen[d]:
+                    continue
+                row = one(db, 'SELECT doc_id,page,t,text FROM chunk WHERE id=?', (int(i) + 1,))
+                if not row or not readable(row[3]):  # indexed before the quality filter existed
+                    continue
+                out.append({'doc_id': row[0], 'page': row[1], 't': row[2], 'text': row[3], 'sem': float(s[i])})
+                if len(out) >= k:
+                    return out
         return out
 
     def gaps_for(self, doc_ids):

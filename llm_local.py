@@ -131,7 +131,7 @@ class Local:
 
     def available(self):
         """True when a question can be answered: running, or ready to start."""
-        return self.state in ('ready', 'stopped', 'loading')
+        return self.enabled() and self.state in ('ready', 'stopped', 'loading')
 
     # -- finding and checking the file ------------------------------------------------------------------------------------
     def start_background(self):
@@ -170,6 +170,8 @@ class Local:
             wrong = wrong or (p, size)
         if not found:
             with self.lock:
+                if not self.enabled():
+                    return
                 if wrong:
                     p, size = wrong
                     done = size < SIZE
@@ -186,11 +188,15 @@ class Local:
             self.saved['checked'] = stamp
             _save(self.saved)
         with self.lock:
+            if not self.enabled():
+                return
             self.path = found
         self._measure()
 
     def _check(self, p):
         with self.lock:
+            if not self.enabled():     # turned off since discover began: leave it off
+                return False
             self.state, self.pct, self.message = 'checking', 0, ''
         h = hashlib.sha256()
         done = 0
@@ -202,18 +208,22 @@ class Local:
                     self.pct = int(done * 100 / SIZE)
         except OSError as e:
             with self.lock:
-                self.state, self.pct, self.message = 'wrong', None, f'Lastbook could not read the model file ({type(e).__name__}).'
+                if self.enabled():
+                    self.state, self.pct, self.message = 'wrong', None, f'Lastbook could not read the model file ({type(e).__name__}).'
             return False
         if h.hexdigest() != SHA256:
             with self.lock:
-                self.state, self.pct = 'wrong', None
-                self.message = f'The file in {_folder_name(p)} has the right size but different contents. Download it again.'
+                if self.enabled():
+                    self.state, self.pct = 'wrong', None
+                    self.message = f'The file in {_folder_name(p)} has the right size but different contents. Download it again.'
             return False
-        return True
+        return self.enabled()
 
     def _measure(self):
         """llama.cpp's fitting decides where each part of the model goes; this then checks the whole fits this computer."""
         with self.lock:
+            if not self.enabled():
+                return
             self.state, self.pct, self.message = 'measuring', None, ''
         try:
             out = subprocess.run(self._argv(['--measure']), stdin=subprocess.DEVNULL, capture_output=True, timeout=180, **_quiet())
@@ -222,6 +232,8 @@ class Local:
             fit, out = None, None
             print('local AI: measuring failed:', type(e).__name__, e, flush=True)
         with self.lock:
+            if not self.enabled():
+                return
             if not fit:
                 self.state, self.message = 'error', 'The local AI program could not read the model file.'
                 if out is not None:
@@ -242,6 +254,8 @@ class Local:
     def ensure_running(self, on_wait=None, cancelled=lambda: False):
         """Starts the model if it is stopped and waits until it is ready. Returns None when ready, else a sentence why not."""
         with self.lock:
+            if not self.enabled():
+                return 'The local AI is turned off.'
             if self.state == 'ready' and self.proc and self.proc.poll() is None:
                 self.last_used = time.time()
                 return None

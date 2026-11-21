@@ -27,7 +27,9 @@ The contract is `docs/SETUP-API.md`. This package fills it in.
 
 ## Comparing two packs (not used by setup yet)
 
-`install.read_pack_manifest` reads a `pack-manifest.tsv` the way repair does, and `install.compare_pack_manifests` compares an installed library's list with a new release's: which paths would be added, removed, changed (size or SHA-256) or unchanged, and how many bytes would have to be fetched or are already here. It is read-only: it opens no library file and downloads nothing. Nothing in setup calls it yet. It is a first step toward upgrades that fetch only what changed (issue #144). To try it:
+`install.read_pack_manifest` reads a `pack-manifest.tsv` the way repair does, and `install.compare_pack_manifests` compares an installed library's list with a new release's: which paths would be added, removed, changed (size or SHA-256) or unchanged, and how many bytes would have to be fetched or are already here. It is read-only: it opens no library file and downloads nothing. Nothing in setup calls it yet. It is a first step toward upgrades that fetch only what changed (issue #144).
+
+`install.plan_update(lib, new)` builds on it for an installed library: the same comparison for the pack's own files, plus what an update would keep as it is, listed apart and never counted as removed. That is a map installed on its own (`map-set.json`, whose files are then left out of the comparison, as repair checks them against `map-set.json`), the local AI in `models/`, address indexes in `derived/geo/addresses/`, and any other file neither list names. It reads the two lists and the names and sizes of the library's files, and downloads, writes and deletes nothing. Nothing in setup calls it yet either. To try it (with `--data`, the tool shows the plan):
 
 ```bash
 python3 tools/compare_packs.py --data /path/to/LastbookData /path/to/new/pack-manifest.tsv --list

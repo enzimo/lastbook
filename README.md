@@ -20,9 +20,9 @@ Website: <https://lastbook.org>. Contact: hello@lastbook.org.
 
 | Platform | Version | Status |
 |---|---|---|
-| macOS (Apple Silicon, macOS 14 or later) | 1.1.13 | Live on lastbook.org, signed and notarized |
-| Windows (64-bit, Windows 10 or later) | 1.1.13 | Live on lastbook.org, Authenticode signed |
-| Linux (Ubuntu 24.04 or 26.04 LTS, x86_64) | 1.1.13 | Ubuntu packages; installation instructions below |
+| macOS (Apple Silicon, macOS 14 or later) | 1.1.14 | Live on lastbook.org, signed and notarized |
+| Windows (64-bit, Windows 10 or later) | 1.1.14 | Live on lastbook.org, Authenticode signed |
+| Linux (Ubuntu 24.04 or 26.04 LTS, x86_64) | 1.1.14 | Ubuntu packages; installation instructions below |
 
 ## iPad (development preview, source only)
 
@@ -34,11 +34,11 @@ A native iPad app (Videos, Map and Chat, offline, with optional on-device AI) is
 ## Install on Linux
 
 The Linux packages target **Ubuntu 24.04 LTS and Ubuntu 26.04 LTS on Intel/AMD x86_64 computers**, one package for each. Download
-[Lastbook for Ubuntu 24.04](https://downloads.lastbook.org/Lastbook_1.1.13_amd64.deb) (or [for Ubuntu 26.04](https://downloads.lastbook.org/Lastbook_1.1.13_ubuntu26.04_amd64.deb)), then install it with apt so Ubuntu resolves its dependencies.
+[Lastbook for Ubuntu 24.04](https://downloads.lastbook.org/Lastbook_1.1.14_amd64.deb) (or [for Ubuntu 26.04](https://downloads.lastbook.org/Lastbook_1.1.14_ubuntu26.04_amd64.deb)), then install it with apt so Ubuntu resolves its dependencies.
 
 ```bash
-sudo apt install ./Lastbook_1.1.13_amd64.deb                  # Ubuntu 24.04
-sudo apt install ./Lastbook_1.1.13_ubuntu26.04_amd64.deb      # Ubuntu 26.04
+sudo apt install ./Lastbook_1.1.14_amd64.deb                  # Ubuntu 24.04
+sudo apt install ./Lastbook_1.1.14_ubuntu26.04_amd64.deb      # Ubuntu 26.04
 ```
 
 Open Lastbook from the application menu. First-run setup downloads your chosen library, state map and optional local AI.
@@ -132,8 +132,12 @@ https://www.nuget.org/api/v2/package/Microsoft.Web.WebView2/1.0.3856.49 and copy
 against the hashes in `packaging/build_app_windows.sh`.
 
 On Linux, start it through `packaging/linux/run_source_linux.sh` instead, or videos will not play. The window comes
-from the system (WebKitGTK 4.1 and PyGObject), so make the virtual environment with `--system-site-packages` and install
-`packaging/linux/requirements_linux.txt`:
+from the system (WebKitGTK 4.1 and PyGObject), so make the virtual environment with `--system-site-packages` and
+install one requirements file — `packaging/linux/requirements_linux.txt` on Ubuntu (or Arch), or
+`packaging/linux/requirements_linux_fedora.txt` on Fedora (and any source install on Python 3.15, where the packaged
+pins have no wheel):
+
+Ubuntu (or Arch):
 
 ```bash
 python3 -m venv --system-site-packages .venv
@@ -141,16 +145,27 @@ python3 -m venv --system-site-packages .venv
 bash packaging/linux/run_source_linux.sh --data /path/to/LastbookData
 ```
 
+Fedora:
+
+```bash
+python3 -m venv --system-site-packages .venv
+.venv/bin/pip install -r packaging/linux/requirements_linux_fedora.txt
+bash packaging/linux/run_source_linux.sh --data /path/to/LastbookData
+```
+
 The packaged app plays library videos through `lastbooksrc`, its own GStreamer source for `lastbook://` addresses
 (`packaging/linux/gst/lastbooksrc.c`). A source run has no copy of it. The script builds it into `derived/gst/`,
 points GStreamer and WebKit at it for that launch only, and warns about any missing decoders. It needs these packages:
 
-| | Arch | Ubuntu |
-|---|---|---|
-| Build the plugin | `gcc pkg-config gstreamer` | `gcc pkg-config libgstreamer1.0-dev` |
-| Window | `webkit2gtk-4.1 python-gobject` | `gir1.2-webkit2-4.1 python3-gi` |
-| MP4, H.264, AAC | `gst-plugins-base gst-plugins-good gst-libav` | `gstreamer1.0-plugins-good gstreamer1.0-libav` |
-| AV1 (many of the library's videos) | `gst-plugin-dav1d` | `gstreamer1.0-plugins-bad` |
+| | Arch | Ubuntu | Fedora |
+|---|---|---|---|
+| Build the plugin | `gcc pkg-config gstreamer` | `gcc pkg-config libgstreamer1.0-dev` | `gcc pkgconf-pkg-config gstreamer1-devel gstreamer1-plugins-base-devel` |
+| Window | `webkit2gtk-4.1 python-gobject` | `gir1.2-webkit2-4.1 python3-gi` | `webkit2gtk4.1 python3-gobject` |
+| MP4, H.264, AAC | `gst-plugins-base gst-plugins-good gst-libav` | `gstreamer1.0-plugins-good gstreamer1.0-libav` | `gstreamer1-plugins-base gstreamer1-plugins-good gstreamer1-plugin-libav` |
+| AV1 (many of the library's videos) | `gst-plugin-dav1d` | `gstreamer1.0-plugins-bad` | `gstreamer1-plugin-dav1d` |
+
+A source run was validated natively on Fedora 45 (Python 3.15), with `requirements_linux_fedora.txt`: the whole test
+suite passes, videos decode, and the window opens.
 
 Without an AV1 decoder, those videos fail or play with sound and a black picture. To check video without opening the
 window, decode a few library videos through `lastbooksrc`. Name an AV1 video to cover that decoder too:
@@ -221,7 +236,7 @@ The published Windows 1.1.8 installer passed installation and startup checks, an
 had valid signatures. The release is 104,960,408 bytes with SHA-256
 `0b31eea87fa05523ca710575e5939754fe10a65eb44ee7d88fe975fbbd161d74`.
 
-**Linux (build on Ubuntu 24.04 or 26.04, x86_64)**
+**Linux (build on Ubuntu 24.04 or 26.04, or Debian 13, x86_64)**
 
 ```bash
 bash packaging/llm/build_llm_linux.sh
@@ -229,11 +244,12 @@ bash packaging/linux/build_app_linux.sh
 ```
 
 The package uses the system Python and pinned wheels from `packaging/linux/requirements_linux.txt`, built for that Python
-only, so each Ubuntu release gets its own package. On 24.04 (Python 3.12) the app build creates
-`derived/app-build/linux/<timestamp>/Lastbook_1.1.13_amd64.deb`; on 26.04 (Python 3.14) it creates
-`Lastbook_1.1.13_ubuntu26.04_amd64.deb`, with the version `1.1.13+ubuntu26.04`, which apt takes as newer than the 24.04 package.
+only, so each release gets its own package. On 24.04 (Python 3.12) the app build creates
+`derived/app-build/linux/<timestamp>/Lastbook_1.1.14_amd64.deb`; on 26.04 (Python 3.14) it creates
+`Lastbook_1.1.14_ubuntu26.04_amd64.deb`, with the version `1.1.14+ubuntu26.04`, which apt takes as newer than the 24.04 package; on Debian 13 (Python 3.13) it creates
+`Lastbook_1.1.14_debian13_amd64.deb`, with the version `1.1.14+debian13`.
 It bundles the local AI runner when `derived/llm/bin-linux/lastbook-llm` exists. `packaging/linux/smoke_deb.sh` checks
-the package in a fresh container of the same Ubuntu release.
+the package in a fresh container of the same release.
 Linux integration-test helpers live under `app/tests/linux_*`; set `LASTBOOK_TEST_HOST` to a Windows SSH host with WSL2
 before running them. Their disposable test distro is named `LastbookTest`, with files under `C:\LastbookTest`.
 
@@ -272,12 +288,10 @@ before running them. Their disposable test distro is named `LastbookTest`, with 
 
 ## Tests
 
-```bash
-python3 -B -m unittest app.tests.test_bridge app.tests.test_setup app.tests.test_data_folder app.tests.test_what_ships app.tests.test_update app.tests.test_address_search app.tests.test_topic_search app.tests.test_chat_steps app.tests.test_validate_topics app.tests.test_libq app.tests.test_video_transcripts
-```
+See [the contributor test instructions](CONTRIBUTING.md#test) for the unit test command and platform requirements.
 
-`test_bridge` needs a data folder (`LASTBOOK_DATA`); the others run without a library. `packaging/test_pack_tools.py SAMPLE
-WORK` checks the pack tools against a pack sample (`build_packs.py build <pack> --sample N`). The `mac_*` and `win_*`
+`packaging/test_pack_tools.py SAMPLE WORK` checks the pack tools against a pack sample
+(`build_packs.py build <pack> --sample N`). The `mac_*` and `win_*`
 scripts in `app/tests/` drive a real build against a real data folder, and their paths are placeholders
 (`/path/to/lastbook`, `C:\Users\you\app-test`) to set for your own machine.
 

@@ -167,7 +167,7 @@
   {
    "id": "special",
    "label": "Feeding babies or people with special diets",
-   "hint": "Formula, elderly, illness, allergies",
+   "hint": "Formula, elderly, illness, allergies, pets",
    "read": [
     {
      "doc": "e4bfed4b6afd6d",

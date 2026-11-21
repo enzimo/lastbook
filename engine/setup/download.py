@@ -408,6 +408,8 @@ class Download:
         with open(self.part, 'ab') as f:
             f.truncate(start)
         h, start = self._rehash(start) if start else (hashlib.sha256(), 0)
+        if start:
+            self.progress(start, self.size, 'downloading')   # the re-read is over: a wait for the server from here is shown as one
         etag = meta.get('etag')
         if start < self.size and self._parallel_wanted():
             h, start, etag = self._run_parallel(h, start, etag, ctx)

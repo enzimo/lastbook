@@ -11,6 +11,7 @@ The exception is the web service (server.py with LASTBOOK_REMOTE_SETUP=1, docs/W
 a reverse proxy, so server.py marks a request that holds the access key (h.remote_setup_ok) after its Host and Origin checks.
 Such a request may not name folders or files on the server, and is never offered the local AI.
 """
+import errno
 import hashlib
 import json
 import os
@@ -32,7 +33,27 @@ SAVE_EVERY = 2.0
 RECOMMEND_MARGIN = 5 * 10 ** 9     # beyond what the install needs, so the disk is not left full
 RECOMMEND_MARGIN_MAX = 20 * 10 ** 9
 MAX_BODY = 64 * 1024
-ACTIVE = ('waiting', 'downloading', 'verifying', 'unpacking', 'activating')
+ACTIVE = ('waiting', 'downloading', 'verifying', 'unpacking', 'activating', 'copying')
+FAT_MAX = 4 * 2 ** 30 - 1        # the largest file FAT32 can hold
+COPY_MARK = '.lastbook-copy-in-progress'   # in a copy's LastbookData until it is complete: copying there again carries on
+START_HERE = """Lastbook: an offline survival library
+
+This drive holds a copy of a Lastbook library: the {title} library, {size} in {files} files, copied {date}.
+It works with no internet: manuals, videos, encyclopedias and maps.
+
+To use it on another computer:
+1. Install the Lastbook app on that computer. This drive does not hold the app: get it from
+   lastbook.org, or from someone who has the installer.
+2. Open Lastbook. In setup, choose to use a library that is already on this computer,
+   and choose the folder called {data} on this drive. You can copy that folder onto the
+   computer first, or use it from the drive.
+3. To make sure every file arrived whole, use Library and local AI, then Check and repair.
+   It reads every file, and downloads something only if a file is damaged.
+
+This drive holds only the library's own files, as they were published. Nothing personal
+from the computer it was copied from is on it: no settings, saved pages, chats, notes,
+address search or local AI.
+"""
 
 
 def _now():
@@ -56,6 +77,72 @@ def _sha256(path, control, progress):
             done += len(b)
             progress(done, total)
     return h.hexdigest()
+
+
+def _drop_cache(fd):
+    """Ask the system to forget its cached copy of a file just written, so reading it back comes from the drive. Best effort:
+    Linux drops the pages; elsewhere the read-back may come partly from the cache."""
+    try:
+        os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
+    except (AttributeError, OSError):
+        pass
+
+
+def _read_back(path, control, progress):
+    """SHA-256 of a file as the drive gives it back. On a Mac the read skips the cache (F_NOCACHE)."""
+    h, done = hashlib.sha256(), 0
+    with open(path, 'rb') as f:
+        if sys.platform == 'darwin':
+            try:
+                import fcntl
+                fcntl.fcntl(f.fileno(), 48, 1)      # F_NOCACHE
+            except (ImportError, OSError):
+                pass
+        _drop_cache(f.fileno())
+        while True:
+            control.check()
+            b = f.read(8 * 1024 * 1024)
+            if not b:
+                break
+            h.update(b)
+            done += len(b)
+            progress(done)
+    return h.hexdigest()
+
+
+def _dest_ok(dst, rel):
+    """A copy writes only inside its own LastbookData on the drive. Refuses when the copy folder, any folder on the way to rel, the
+    file, or its .partial is a link: a link left on a drive could otherwise send the copy into someone else's folder."""
+    if dst.is_symlink():
+        raise install.Refused('copy', f'The {DATA_NAME} folder on the drive is a link, so nothing was written there. Choose another drive or folder.')
+    p = dst
+    for part in Path(rel).parts:
+        p = p / part
+        if p.is_symlink():
+            raise install.Refused('copy', f'On the drive, {rel} goes through a link that could lead outside the copy, so nothing more was '
+                                          'written. Choose another drive or folder.')
+    if p.with_name(p.name + '.partial').is_symlink():
+        raise install.Refused('copy', f'On the drive, {rel}.partial is a link, so nothing more was written. Choose another drive or folder.')
+
+
+def _inside(dst, path):
+    root, real = dst.resolve(), Path(path).resolve()
+    return real == root or root in real.parents
+
+
+def _open_new(path):
+    """Open a file for writing without following a link to it (O_NOFOLLOW where the system has it)."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_BINARY', 0)
+    return os.fdopen(os.open(path, flags, 0o644), 'wb')
+
+
+def _ours(path):
+    """Is this START-HERE.txt one a Lastbook copy wrote?"""
+    try:
+        with open(path, encoding='utf-8', errors='replace') as f:
+            return f.readline().strip() == START_HERE.splitlines()[0]
+    except OSError:
+        return False
 
 
 def _same_disk(a, b):
@@ -165,6 +252,8 @@ class Setup:
         if not isinstance(plan, dict) or not isinstance(items, list) or not all(isinstance(i, dict) for i in items):
             return None
         if job.get('state') not in ACTIVE + ('paused', 'done', 'failed'):
+            return None
+        if plan.get('copy'):     # a copy is not carried over a restart: copying to the same place again carries on where it was
             return None
         if plan.get('use_library'):
             lib = Path(plan['use_library'])
@@ -446,7 +535,9 @@ class Setup:
             return p.parent if p.name == DATA_NAME else p
         return self.current.parent if self.current else self.default_parent
 
-    def start(self, pack_id=None, ai=False, folder=None, sources=None, explicit=False, repair=False, map_id=None, address_id=None):
+    def start(self, pack_id=None, ai=False, folder=None, sources=None, explicit=False, repair=False, map_id=None, address_id=None, copy_to=None):
+        if copy_to:
+            return self._start_copy(copy_to)
         if repair:
             return self._start_repair(ai)
         with self.lock:
@@ -604,6 +695,170 @@ class Setup:
             self._run()
             return self.public_job()
 
+    # ------------------------------------------------------------------------------------- copy for someone else (#114) --
+    def copy_rows(self, lib):
+        """What a copy holds: the library's own files as pack-manifest.tsv lists them (path, bytes, sha256), the manifest itself,
+        and, where a state map replaced the pack's map, that map's files as map-set.json lists them (path, bytes, None). Nothing of
+        the person's own is on either list: no settings, saved items, chats, notes, address indexes or local AI."""
+        lib = Path(lib)
+        rows = [l.split('\t') for l in (lib / 'pack-manifest.tsv').read_text(encoding='utf-8').splitlines()[1:] if l.strip()]
+        rows = [(r[0], int(r[1]), r[2]) for r in rows]
+        mp = install.map_set(lib)
+        if mp:
+            rows = [r for r in rows if not install.map_member(r[0])]
+            rows += [(rel, int(size), None) for rel, size in sorted(mp['files'].items()) if install.map_member(rel)]
+            rows.append(('map-set.json', (lib / 'map-set.json').stat().st_size, None))
+        rows.append(('pack-manifest.tsv', (lib / 'pack-manifest.tsv').stat().st_size, None))
+        root = lib.resolve()
+        for rel, _, _ in rows:
+            if '..' in Path(rel).parts or Path(rel).is_absolute():
+                raise install.Refused('copy', f'The library lists a file outside itself ({rel[:80]!r}), so it was not copied.')
+            real = (lib / rel).resolve()        # a link inside the library must not bring in a file from elsewhere (as library.real_path)
+            if root not in real.parents:
+                raise install.Refused('copy', f'The library’s {rel[:80]} leads outside the library, so nothing was copied.')
+        return rows
+
+    def _start_copy(self, where):
+        """Copy the open library to <where>/LastbookData, for someone with no internet. Nothing is downloaded."""
+        with self.lock:
+            if self.job and self.job['state'] in ACTIVE + ('paused',):
+                return {'error': 'Something else is under way. Let it finish, or cancel it, first.', 'code': 'busy'}
+            cur = self.current_info()
+            if self.mode != 'manage' or not cur:
+                return {'error': 'There is no library to copy yet.', 'code': 'nothing'}
+            if _pending_file(self.settings_dir).exists():
+                return {'error': 'An update is waiting for Lastbook to restart. Restart it, then copy.', 'code': 'busy'}
+            p = Path(str(where or '')).expanduser()
+            target = p if p.name == DATA_NAME else p / DATA_NAME
+            here = self.current.resolve()
+            try:
+                there = target.resolve()
+            except OSError:
+                return {'error': 'Lastbook cannot use that place. Choose a drive or folder.', 'code': 'folder'}
+            if not str(where or '').strip() or not target.parent.is_dir():
+                return {'error': 'Lastbook cannot find that drive or folder.', 'code': 'missing'}
+            if there == here or here in there.parents or there in here.parents:
+                return {'error': 'Choose a place outside this library, such as a USB drive.', 'code': 'folder'}
+            if target.is_symlink():
+                return {'error': f'The {DATA_NAME} folder there is a link. Choose another drive or folder.', 'code': 'folder'}
+            if target.exists() and not target.is_dir():
+                return {'error': f'There is already a file called {DATA_NAME} there. Choose another drive or folder.', 'code': 'folder'}
+            if target.exists() and any(target.iterdir()) and not (target / COPY_MARK).exists():
+                return {'error': f'There is already a {DATA_NAME} folder there. Choose another drive or folder.', 'code': 'folder'}
+            if not os.access(target.parent, os.W_OK):
+                return {'error': 'Lastbook cannot save there. Choose a drive you can write to.', 'code': 'folder'}
+            try:
+                rows = self.copy_rows(self.current)
+            except install.Refused as e:
+                return {'error': e.message, 'code': 'copy'}
+            except (OSError, ValueError, IndexError):
+                return {'error': 'This library has no list of its files, so it cannot be copied. Check and repair it first.', 'code': 'unavailable'}
+            total = sum(r[1] for r in rows)
+            if max(r[1] for r in rows) >= FAT_MAX and (hardware.fs_type(target.parent) or '').lower() in hardware.FAT:
+                return {'error': 'That drive cannot hold files larger than 4 GB (it is FAT32), and this library has some. Use a drive formatted as exFAT.',
+                        'code': 'fat'}
+            cluster = hardware.cluster_size(target.parent) or 128 * 1024   # unknown: assume exFAT's usual 128 KB
+            on_disk = lambda n: -(-n // cluster) * cluster                     # every file takes whole clusters
+            dirs = {str(Path(rel).parent) for rel, _, _ in rows}
+            left = sum(on_disk(size) for rel, size, _ in rows if not ((target / rel).is_file() and (target / rel).stat().st_size == size))
+            left += len(dirs) * cluster
+            free, _ = hardware.disk_of(target.parent)
+            if free < left + 64 * 2 ** 20:
+                return {'error': f'This needs {_gb(left)} free, and that drive has {_gb(free)}. Choose a larger drive.', 'code': 'no_space',
+                        'need_bytes': left, 'free_bytes': free}
+            pack = self.manifest.pack(cur['pack']) if cur['pack'] else None
+            title = (pack or {}).get('title') or cur['pack'] or 'Lastbook'
+            self.job = {'id': uuid.uuid4().hex[:12], 'state': 'waiting', 'error': None, 'started': _now(), 'folder': str(target), 'copy': True,
+                        'items': [{'id': 'copy', 'kind': 'copy', 'title': f'Copy of the {title} library', 'state': 'waiting', 'bytes_done': 0,
+                                   'bytes_total': total, 'rate_bps': 0, 'eta_s': None, 'error': None}],
+                        'plan': {'copy': True, 'source': str(self.current), 'target': str(target), 'work': str(target / COPY_MARK),
+                                 'title': title, 'sources': {}, 'explicit': False, 'retried': {}, 'switch': False}}
+            self._save_job()
+            self._run()
+            return self.public_job()
+
+    def _do_copy(self, it, plan, control):
+        """Each file to <target>/<path>.partial, then read back from the drive (past the system's cache where it can) and renamed
+        only when what the drive gives back has the SHA-256 the list says, or, for a state map's files, the one read from the
+        library. A drive that loses data (a fake-capacity stick) is caught here, not by the person with no internet.
+        A file already there at its size and SHA-256 (an earlier copy that stopped) is kept. The source is never changed."""
+        src, dst = Path(plan['source']), Path(plan['target'])
+        rows = self.copy_rows(src)
+        _dest_ok(dst, COPY_MARK)
+        dst.mkdir(parents=True, exist_ok=True)
+        with _open_new(dst / COPY_MARK) as f:
+            f.write('Lastbook is copying a library here. Copy again to the same place to carry on.\n'.encode('utf-8'))
+        tracker, done, total = _Item(it), 0, sum(r[1] for r in rows)
+        self._set(it, 'copying', bytes_done=0, bytes_total=total)
+        for rel, size, digest in rows:
+            control.check()
+            a, b = src / rel, dst / rel
+            _dest_ok(dst, rel)
+            if b.is_file() and b.stat().st_size == size and digest is not None and _read_back(b, control, lambda n: None) == digest:
+                done += size
+                tracker.progress(done, total, 'copying')
+                continue
+            if not a.is_file() or a.stat().st_size != size:
+                raise install.Refused('copy', f'The library’s {rel} is missing or the wrong size, so the copy stopped. Check and repair the library, then copy again.')
+            b.parent.mkdir(parents=True, exist_ok=True)
+            if not _inside(dst, b.parent):           # checked again now the folders exist
+                raise install.Refused('copy', f'On the drive, {rel} would land outside the copy, so nothing more was written. Choose another drive or folder.')
+            part = b.with_name(b.name + '.partial')
+            plan['partial'] = str(part)
+            h, base, written = hashlib.sha256(), done, 0
+            try:
+                with open(a, 'rb') as fa, _open_new(part) as fb:
+                    while True:
+                        control.check()
+                        chunk = fa.read(8 * 1024 * 1024)
+                        if not chunk:
+                            break
+                        fb.write(chunk)
+                        h.update(chunk)
+                        written += len(chunk)
+                        tracker.progress(base + written // 2, total, 'copying')    # writing is half the work, reading it back the other
+                    fb.flush()
+                    os.fsync(fb.fileno())
+                    _drop_cache(fb.fileno())
+            except OSError as e:
+                too_big = size > FAT_MAX and written >= FAT_MAX - 64 * 2 ** 20
+                if too_big and e.errno in (errno.EFBIG, errno.EINVAL, errno.ENOSPC):   # Windows says "disk full" at FAT's 4 GB limit
+                    raise install.Refused('copy', 'That drive cannot hold files larger than 4 GB (it is probably FAT32). Use a drive formatted as exFAT.')
+                raise
+            source = h.hexdigest()
+            if digest is not None and source != digest:
+                part.unlink()
+                raise install.Refused('copy', f'The library’s {rel} does not match its published copy, so it was not copied. Check and repair the library, then copy again.')
+            back = _read_back(part, control, lambda n: tracker.progress(base + (size + n) // 2, total, 'copying'))
+            if back != source:
+                part.unlink()
+                raise install.Refused('copy', f'The drive gave back different bytes for {rel} than were written to it. It may be faulty, or smaller '
+                                              'than it claims. Use another drive.')
+            os.replace(part, b)
+            plan.pop('partial', None)
+            done = base + size
+        plan['copied'] = {'files': len(rows), 'bytes': total}
+
+    def _finish_copy(self, plan):
+        """The drive's START-HERE.txt, then the copy counts as complete."""
+        dst = Path(plan['target'])
+        c = plan.get('copied') or {}
+        text = START_HERE.format(title=plan.get('title') or 'Lastbook', size=_gb(c.get('bytes') or 0), files=c.get('files') or 0,
+                                 date=time.strftime('%Y-%m-%d'), data=DATA_NAME)
+        names = ['START-HERE.txt', 'START-HERE (Lastbook).txt'] + [f'START-HERE (Lastbook {n}).txt' for n in range(2, 100)]
+        name = next((n for n in names if not (dst.parent / n).is_symlink() and (not (dst.parent / n).exists() or _ours(dst.parent / n))), None)
+        if name is None:
+            raise install.Refused('copy', 'The drive already holds many START-HERE files that are not Lastbook’s. Remove some, then copy again.')
+        tmp = dst.parent / f'.{name}.{uuid.uuid4().hex[:8]}.partial'      # a fresh name: never someone else's file, never a link
+        with _open_new(tmp) as f:
+            f.write(text.replace('\n', '\r\n').encode('utf-8'))       # Windows line ends: every computer's text editor opens it
+        os.replace(tmp, dst.parent / name)        # someone else's file of that name is never replaced: name is new or ours
+        try:
+            (dst / COPY_MARK).unlink()
+        except FileNotFoundError:
+            pass
+        self.job['result'] = {'files': c.get('files'), 'bytes': c.get('bytes'), 'folder': str(dst), 'start_here': name}
+
     def _check_library(self, it, lib, control):
         """Files of the open library that are missing or differ from its pack-manifest.tsv (path, bytes, sha256)."""
         try:
@@ -672,7 +927,20 @@ class Setup:
                 self.control.stop('cancelled')
         self._join()
         with self.lock:
-            if job['state'] != 'done' or job['plan'].get('switch'):     # a staged library not yet switched to can still be dropped
+            if job.get('copy') and job['state'] != 'done':   # what is copied stays on the drive: copying there again carries on
+                part = job['plan'].pop('partial', None)
+                if part:
+                    try:
+                        os.unlink(part)
+                    except OSError:
+                        pass
+                job['state'] = 'failed'
+                job['error'] = {'code': 'cancelled', 'message': 'Cancelled. This library was not changed; copy again to the same place to carry on.'}
+                for it in job['items']:
+                    if it['state'] != 'done':
+                        it['state'] = 'failed'
+                self._save_job()
+            elif job['state'] != 'done' or job['plan'].get('switch'):     # a staged library not yet switched to can still be dropped
                 self._clean(job)
                 try:
                     _pending_file(self.settings_dir).unlink()
@@ -697,12 +965,19 @@ class Setup:
         for sub in ('downloads', 'unpack', 'unpack-map', 'unpack-addresses'):
             shutil.rmtree(work / sub, ignore_errors=True)
 
-    def use(self, path):
+    def use(self, path, library_only=False):
+        """A library or file already on this computer. library_only (Library and local AI's "Open another library folder", #266):
+        only an existing library, or the folder that holds one, is accepted. A folder holding a pack zip, or a file, is refused
+        and nothing starts, so choosing a folder can never begin replacing the open library."""
         p = Path(path or '').expanduser()
         if not str(path or '').strip() or not p.exists():
             return {'error': 'Lastbook cannot find that file or folder.', 'code': 'missing'}
+        if library_only and not p.is_dir():
+            return {'error': f'Choose a library folder, the one called {DATA_NAME}, not a file.', 'code': 'not_library'}
         if p.is_dir():
             lib = p if install.is_library(p) else p / DATA_NAME
+            if library_only and not install.is_library(lib):
+                return {'error': f'“{p.name}” is not a Lastbook library. Choose the folder called {DATA_NAME}.', 'code': 'not_library'}
             if not install.is_library(lib):
                 known = {f['name'] for pk in self.manifest.current['packs'] for f in pk['files']}
                 model = self.manifest.model()
@@ -712,6 +987,8 @@ class Setup:
                 if inside:          # the person explicitly chose this folder
                     return self.use(str(inside[0]))
                 return {'error': f'“{p.name}” is not a Lastbook library. Choose the folder called {DATA_NAME}.', 'code': 'not_library'}
+            if self.current and install._real(lib) == install._real(self.current):
+                return {'error': 'That library is the one open now.', 'code': 'current'}
             if not os.access(lib, os.W_OK):
                 return {'error': f'Lastbook cannot save in “{lib.name}”. Move it somewhere you can save to, then choose it there.', 'code': 'folder'}
             with self.lock:
@@ -756,6 +1033,16 @@ class Setup:
             if p.stat().st_size != m['size']:
                 return {'error': f'That file is {_gb(p.stat().st_size)}, not the {_gb(m["size"])} of the model. The download may not have finished.', 'code': 'size'}
             self.sources[name] = str(p)
+            with self.lock:
+                job = self.job
+                if (job and job['state'] == 'failed' and (job['error'] or {}).get('code') == 'network'
+                        and (job['plan'].get('model') or {}).get('file') == name
+                        and any(it['kind'] == 'model' and it['state'] == 'failed' and not it['bytes_done'] for it in job['items'])):
+                    job['plan']['sources'][name] = str(p)
+                    job['plan']['verified'] = [n for n in job['plan'].get('verified', []) if n != name]
+                    job['plan']['explicit'] = True
+                    _tag_sources(job)
+                    return self.retry()  # keep the finished pack; check the chosen model before using it
             if self.mode == 'manage':
                 return self.start(None, True, None, {name: str(p)}, explicit=True)
             return self.public_job() or {'job': None, 'noted': True}
@@ -766,6 +1053,8 @@ class Setup:
             job = self.job
             if not job or job['state'] != 'done':
                 return {'error': 'Setup has not finished yet.', 'code': 'not_done'}
+            if job.get('copy'):       # a copy went to a drive: there is no library here to switch to
+                return {'error': 'A copy has no library to open here. It is on the drive.', 'code': 'nothing'}
             plan = job['plan']
             folder = plan.get('use_library') or plan['target']
         if not self.on_finish:
@@ -865,11 +1154,14 @@ class Setup:
         it = None
         try:
             work = Path(plan['work'])
-            (work / 'downloads').mkdir(parents=True, exist_ok=True)
+            if not plan.get('copy'):     # a copy writes only to its drive
+                (work / 'downloads').mkdir(parents=True, exist_ok=True)
             for it in job['items']:
                 if it['state'] == 'done':
                     continue
-                if it['kind'] == 'pack':
+                if it['kind'] == 'copy':
+                    self._do_copy(it, plan, control)
+                elif it['kind'] == 'pack':
                     self._do_pack(it, plan, work, control)
                 elif it['kind'] == 'map':
                     self._do_map(it, plan, work, control)
@@ -894,7 +1186,14 @@ class Setup:
         except install.Refused as e:
             self._fail(it, e.code, e.message)
         except OSError as e:
-            if download.disk_full(e):
+            if plan.get('copy'):        # the drive, not the internet: a copy downloads nothing
+                traceback.print_exc()
+                if download.disk_full(e):
+                    self._fail(it, 'no_space', 'The drive filled up. What was copied is kept: use a larger drive, or free some space and copy again to the same place.')
+                else:
+                    self._fail(it, 'copy', f'Lastbook could not read or write a file for the copy ({type(e).__name__}: {e.strerror or e}). '
+                                           'Check the drive is still connected, then copy again to the same place to carry on.')
+            elif download.disk_full(e):
                 self._fail(it, 'no_space', 'The disk filled up. Free some space, then try again.')
             else:
                 traceback.print_exc()
@@ -1088,7 +1387,9 @@ class Setup:
 
     def _finish_job(self, plan, work):
         with self.lock:
-            if plan['switch']:
+            if plan.get('copy'):
+                self._finish_copy(plan)
+            elif plan['switch']:
                 lib = work / 'unpack' / DATA_NAME
                 if not install.is_library(lib):
                     raise install.Refused('activate', 'The new library is not complete.')
@@ -1300,12 +1601,12 @@ def _default():
 ROUTES = {
     ('GET', 'state'): lambda s, b: s.state(),
     ('GET', 'job'): lambda s, b: s.public_job(),
-    ('POST', 'start'): lambda s, b: s.start(b.get('pack'), bool(b.get('ai')), b.get('folder'), repair=bool(b.get('repair')), map_id=b.get('map') or None, address_id=b.get('address_id') or None),
+    ('POST', 'start'): lambda s, b: s.start(b.get('pack'), bool(b.get('ai')), b.get('folder'), repair=bool(b.get('repair')), map_id=b.get('map') or None, address_id=b.get('address_id') or None, copy_to=b.get('copy_to') or None),
     ('POST', 'pause'): lambda s, b: s.pause(),
     ('POST', 'resume'): lambda s, b: s.resume(),
     ('POST', 'cancel'): lambda s, b: s.cancel(),
     ('POST', 'retry'): lambda s, b: s.retry(),
-    ('POST', 'use'): lambda s, b: s.use(b.get('path')),
+    ('POST', 'use'): lambda s, b: s.use(b.get('path'), library_only=b.get('library') is True),
     ('POST', 'finish'): lambda s, b: s.finish(),
     ('POST', 'pick'): lambda s, b: s.pick(files=b.get('files') is True),
     ('POST', 'delete-old'): lambda s, b: s.delete_old(b.get('path')),

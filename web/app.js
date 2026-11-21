@@ -246,7 +246,7 @@ function parse() {
   return { parts: path.split('/').filter(Boolean).map(decodeURIComponent), q: new URLSearchParams(qs || '') };
 }
 // The sidebar row each page belongs to. Reading pages stay under Library, articles under Encyclopedias; search results select no row.
-const NAV_OF = { '': 'videos', guides: 'guides', t: 'guides', ask: 'ask', videos: 'videos', watch: 'videos', map: 'map', library: 'library', learn: 'library', browse: 'library', shelf: 'library', collection: 'library', read: 'library', wiki: 'encyclopedias', search: '', saved: 'saved', encyclopedias: 'encyclopedias', prepare: 'prepare', about: 'about' };
+const NAV_OF = { '': 'videos', guides: 'guides', t: 'guides', ask: 'ask', videos: 'videos', watch: 'videos', map: 'map', library: 'library', learn: 'library', browse: 'library', shelf: 'library', collection: 'library', read: 'library', wiki: 'encyclopedias', search: '', saved: 'saved', 'not-found': 'library', encyclopedias: 'encyclopedias', prepare: 'prepare', about: 'about' };
 let leaving = null;  // cleanup hook for the current view (player, chat stream…)
 async function route() {
   const cameFromSide = !!(document.activeElement && document.activeElement.closest && document.activeElement.closest('.side,.tabbar'));
@@ -292,6 +292,7 @@ async function route() {
     else if (v === 'encyclopedias') await encyclopedias(q.get('q') || '');
     else if (v === 'map') await MapView.page(main, q);
     else if (v === 'saved') await savedPage();
+    else if (v === 'not-found') await notFoundPage();
     else if (v === 'shelf') await shelfPage(parts[1], q.get('kind') || 'all', q.get('q') || '');
     else if (v === 'collection') await collectionPage(q.get('name') || '', q.get('from'));
     else if (v === 'about') await about();
@@ -934,7 +935,8 @@ async function zimResults(q, el, max = 8, heading = '') {
 }
 
 /* ------------------------------------------------------------- search -- */
-const QSTOP = new Set('a an and are can do does for from get got have how i if in is it its me my need no not of on or our so that the this to was we what when where which who why will with without you your won don can t s'.split(' '));
+// A guide word only has to start with a search word, so she, her and his would find shelter, here and hissing.
+const QSTOP = new Set('a an and are can do does for from get got have how i if in is it its me my need no not of on or our so that the this to was we what when where which who why will with without you your won don can t s she her hers his him'.split(' '));
 // Words are split, folded and matched by web/words.js (loaded first), so accents, Chinese and other scripts work.
 function topicMatches(q) {
   return typeof SearchWords === 'undefined' ? [] : SearchWords.rankTopics(q, TOPICS, QSTOP);
@@ -1001,7 +1003,7 @@ async function results(q, kind) {
   parts.push(found);
   if (kind === 'all') parts.push(found.then(() => seq === searchSeq && zimResults(q, $('#szim'), 6, 'In the encyclopedias')));
   const any = (await Promise.all(parts)).some(Boolean);
-  if (seq === searchSeq && !g.length && !any) $('#sres').innerHTML = emptySearch(q);
+  if (seq === searchSeq && !g.length && !any) { $('#sres').innerHTML = emptySearch(q); offerNote(q) }
 }
 // Most relevant pages from the shared keyword + meaning-based retriever (the same one the assistant uses).
 async function passages(q, seq) {
@@ -1012,7 +1014,34 @@ async function passages(q, seq) {
     return true;
   } catch { return false }
 }
-const emptySearch = q => `<div class="empty"><span class="e-ico">${ico('search')}</span><b>No results for “${esc(q)}”</b><p>Try fewer words, or another word for the same thing.</p></div>`;
+const emptySearch = q => `<div class="empty"><span class="e-ico">${ico('search')}</span><b>No results for “${esc(q)}”</b><p>Try fewer words, or another word for the same thing.</p><div id="noteOffer"></div></div>`;
+/* Things I couldn't find (#116, engine/notes.py): when a search finds nothing, the person may keep a note of it, on this computer
+   only. Nothing is kept unless they press the button. The engine answers only this computer, so elsewhere nothing is offered. */
+let notesOpen = null;
+const notesHere = () => notesOpen || (notesOpen = api('/api/not-found').then(() => true, () => { notesOpen = null; return false }));
+function guideBefore() {   // the guide the person searched from, if any: the page before this run of searches
+  for (let i = navAt - 1; i >= 0; i--) {
+    const h = navStack[i] || '';
+    if (h.startsWith('#/search')) continue;
+    const m = h.match(/^#\/t\/([^/?]+)/);
+    return m ? decodeURIComponent(m[1]) : null;
+  }
+  return null;
+}
+async function offerNote(q) {
+  if (!(await notesHere())) return;
+  const el = $('#noteOffer'); if (!el || !q) return;
+  const guide = guideBefore(), t = guide && topicById(guide);
+  el.innerHTML = `<p class="e-act"><button class="btn plain" id="keepNote">Keep a note of this</button></p>
+    <p class="small muted">Saves “${esc(q)}”${t ? ` and the ${esc(SHORT[t.id] || t.title)} guide` : ''} on this computer only, under Library → <a href="#/not-found">Things I couldn’t find</a>. Nothing is sent anywhere.</p>`;
+  $('#keepNote').onclick = async () => {
+    const b = $('#keepNote'); b.disabled = true;
+    try {
+      await api('/api/not-found', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ words: q, guide }) });
+      el.innerHTML = `<p class="small" role="status">Kept. It’s in Library → <a href="#/not-found">Things I couldn’t find</a>, where you can delete it.</p>`;
+    } catch (e) { b.disabled = false; el.insertAdjacentHTML('beforeend', `<p class="small" role="alert">${esc(e.message)}</p>`) }
+  };
+}
 function resultCard(r) {
   const base = { src: r };
   return `<article class="result"><h3><a href="${hrefFor({ ...base, page: r.hits[0] && r.hits[0].page })}">${esc(r.title)}</a></h3>
@@ -1030,12 +1059,18 @@ async function library() {
     <a class="card" href="#/saved"><span class="ico">${ico('save')}</span><b>Saved</b><small>${saved ? saved + ' saved item' + (saved > 1 ? 's' : '') : 'Pages, videos and answers you keep'} on this device</small></a>
     <a class="card" href="#/ask"><span class="ico">${ico('ask')}</span><b>Chats</b><small>${chats ? chats + ' saved conversation' + (chats > 1 ? 's' : '') : 'Ask the library a question'}</small></a>
     <a class="card" href="#/prepare"><span class="ico">${ico('prep')}</span><b>Prepare your household</b><small>Getting-ready readings from every guide</small></a>
+    <a class="card" href="#/not-found" id="nfCard" hidden><span class="ico">${ico('search')}</span><b>Things I couldn’t find</b><small id="nfCount">Notes you kept when a search found nothing</small></a>
   </div>
   ${secHead('Learn a skill', 'Step-by-step routes that start simple')}
   <div class="needs">${learnTopics().map(t => `<a class="need" href="#/t/${t.id}" ${tcStyle(t.id)}><span class="ico">${ico(t.id)}</span><b>${esc(SHORT[t.id] || t.title)}</b><small>${esc(t.short || '')} · ${(t.route || []).length} steps</small></a>`).join('')}</div>
   ${zims.length ? secHead('Encyclopedias', 'Complete offline copies', '<a href="#/encyclopedias">Search them</a>') + `<div class="cards2">${zims.map(z => `<a class="card" href="#/wiki/${z[0]}/?from=${encodeURIComponent('#/library')}"><span class="ico">${ico(z[3])}</span><b>${esc(z[1])}</b><small>${esc(z[2])}</small></a>`).join('')}</div>` : ''}
   ${secHead('Browse by subject', 'Every manual, saved web page and video')}<div id="shelves"><p class="loading">Loading…</p></div>
   <p style="margin-top:20px"><a href="#/about">About this library and its sources</a>${IN_WINDOW ? ' · <a href="/ui/setup.html#manage">Library and local AI</a>' : ''}</p>`;
+  if (await notesHere()) api('/api/not-found').then(d => {
+    const c = $('#nfCard'); if (!c) return;
+    c.hidden = false;
+    if (d.notes.length) $('#nfCount').textContent = `${d.notes.length} note${d.notes.length > 1 ? 's' : ''} on this computer`;
+  }).catch(() => { });
   try {
     const sh = await api('/api/shelves');
     $('#shelves').innerHTML = sh.filter(s => s.read + s.video).map(s => `<a class="shelfrow" href="#/shelf/${s.id}"><span><b>${esc(s.title)}</b><small>${s.read ? s.read.toLocaleString() + ' to read' : ''}${s.read && s.video ? ' · ' : ''}${s.video ? s.video.toLocaleString() + ' videos' : ''}</small></span>${ico('right')}</a>`).join('');
@@ -1092,6 +1127,32 @@ async function savedPage() {
   ${cont.length ? secHead('Continue watching') + rail(cont.map(([id, v]) => vcard({ id, title: v.title, thumb: v.thumb, duration: v.d }, { sub: 'Resume at ' + clock(v.t) })).join('')) : ''}
   ${secHead('Recently opened')}${r.length ? `<div class="collection"><ul class="list">${r.map(li).join('')}</ul></div><p><button class="btn plain" id="clr">Clear recent list</button></p>` : '<div class="empty"><p>Pages you open will appear here.</p></div>'}`;
   const c = $('#clr'); if (c) c.onclick = () => { store.set('recent', []); savedPage() };
+}
+
+// Library → Things I couldn't find: the person's own notes, each with Delete, and Delete all (asked first)
+async function notFoundPage(confirmAll) {
+  setTitle('Things I couldn’t find');
+  let notes;
+  try { notes = (await api('/api/not-found')).notes } catch (e) {
+    main.innerHTML = `<h1>Things I couldn’t find</h1>${errorBox(e)}`; return }
+  const day = s => { const d = new Date(s + 'T12:00:00'); return isNaN(d) ? s : d.toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' }) };
+  const li = n => { const t = n.guide && topicById(n.guide);
+    return `<li class="row nf"><span class="k">${ico('search')}</span><span><b>“${esc(n.words)}”</b><small>${t ? `From the ${esc(SHORT[t.id] || t.title)} guide · ` : ''}${esc(day(n.at))}</small></span><button class="btn plain" data-del="${esc(n.id)}" aria-label="Delete the note “${esc(n.words)}”">Delete</button></li>` };
+  main.innerHTML = `<h1>Things I couldn’t find</h1><p class="lead">Notes you chose to keep when a search found nothing. They stay on this computer, and nothing is sent anywhere.</p>
+    ${notes.length ? `<div class="collection" style="margin-top:18px"><ul class="list">${notes.slice().reverse().map(li).join('')}</ul></div>
+      <p>${confirmAll ? `<span>${notes.length === 1 ? 'Delete this note?' : `Delete all ${notes.length} notes?`}</span> <button class="btn danger" id="nfYes">Delete all</button> <button class="btn plain" id="nfNo">Keep them</button>` : '<button class="btn plain" id="nfAll">Delete all</button>'}</p>`
+      : `<div class="empty"><span class="e-ico">${ico('search')}</span><b>No notes</b><p>When a search finds nothing, you can keep a note of it here, to remember what the library was missing.</p></div>`}`;
+  $$('[data-del]', main).forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    try { await api('/api/not-found/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: b.dataset.del }) }) } catch { }
+    await notFoundPage(); const f = $('[data-del]', main) || $('h1', main); if (f) f.focus();
+  });
+  if ($('#nfAll')) $('#nfAll').onclick = async () => { await notFoundPage(true); $('#nfNo').focus() };
+  if ($('#nfNo')) $('#nfNo').onclick = async () => { await notFoundPage(); $('#nfAll').focus() };
+  if ($('#nfYes')) $('#nfYes').onclick = async () => {
+    try { await api('/api/not-found/delete-all', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }) } catch { }
+    await notFoundPage();
+  };
 }
 
 /* -------------------------------------------------------------- about -- */

@@ -1,9 +1,12 @@
-"""Caption payloads reach the video reader, Chat retrieval and saved course pages intact."""
+"""Caption payloads reach the video reader, Chat retrieval and saved course pages intact, and video search finds
+videos when a broad word is on more manual pages than the search keeps."""
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import assistant
 import retrieval
 import server
 from engine import saved_pages
@@ -187,6 +190,67 @@ class VideoTranscripts(unittest.TestCase):
                 self.assertEqual(text, spoken)
         with patch.object(server, 'LIB', self.root):
             self.assertEqual(server.vtt_cues('captions.vtt'), [{'t': 20, 'text': spoken}])
+
+
+class VideoSearch(unittest.TestCase):
+    """A broad word must still find videos when it is on more manual pages than the search keeps (600 in
+    server.find, 120 in assistant.hybrid): Videos, the Videos row under Everything and the AI's video search."""
+    MANUAL_PAGES = 700
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        recs = [{'id': f'manual-{i}', 'kind': 'pdf', 'path': f'documents/manual-{i}.pdf', 'title': f'Manual {i}'}
+                for i in range(self.MANUAL_PAGES)]
+        recs += [{'id': 'video-pump', 'kind': 'video', 'path': 'videos/pump.mp4', 'title': 'Hand pump repair'},
+                 {'id': 'tx-pump', 'kind': 'transcript', 'path': 'transcripts/pump.txt', 'video_path': 'videos/pump.mp4',
+                  'title': 'Hand pump repair transcript'},
+                 {'id': 'tx-alone', 'kind': 'transcript', 'path': 'transcripts/alone.txt', 'title': 'Rain barrel talk'}]
+        for r in recs:
+            r.update(collection='Test', category='test', publisher='Test')
+        self.cat = {'by_id': {r['id']: r for r in recs}, 'by_path': {r['path']: r for r in recs},
+                    'video_tx': {'videos/pump.mp4': recs[-2]}, 'thumbs': {}}
+        db = self.root / 'search.sqlite'
+        con = sqlite3.connect(db)
+        con.execute('CREATE VIRTUAL TABLE pages USING fts5(doc_id UNINDEXED,title,collection,category,path UNINDEXED,page UNINDEXED,body,tokenize="unicode61")')
+        con.executemany('INSERT INTO pages VALUES (?,?,?,?,?,?,?)',
+                        [(f'manual-{i}', f'Manual {i}', 'Test', 'test', f'documents/manual-{i}.pdf', 1,
+                          'water water clean water storage') for i in range(self.MANUAL_PAGES)])
+        con.execute('INSERT INTO pages VALUES (?,?,?,?,?,?,?)', ('tx-pump', 'Hand pump repair transcript', 'Test', 'test',
+                    'transcripts/pump.txt', None, 'today we fix a hand pump that lifts water from a well'))
+        con.execute('INSERT INTO pages VALUES (?,?,?,?,?,?,?)', ('tx-alone', 'Rain barrel talk', 'Test', 'test',
+                    'transcripts/alone.txt', None, 'a rain barrel keeps water for the garden'))
+        con.commit()
+        con.close()
+        for p in (patch.object(server, 'LIB', self.root), patch.object(server.library, 'DB', db),
+                  patch.object(server, 'catalog', return_value=self.cat), patch.object(assistant, 'S', server),
+                  patch.object(assistant, 'INDEX', None)):
+            p.start()
+            self.addCleanup(p.stop)
+        server.find.cache_clear()
+        self.addCleanup(server.find.cache_clear)
+
+    def test_videos_tab_finds_a_video_past_the_cap(self):
+        self.assertIn('video-pump', [r['id'] for r in server.find('water', 'video')['results']])
+
+    def test_chat_video_search_finds_a_video_past_the_cap(self):
+        self.assertIn('video-pump', [h['doc_id'] for h in assistant.hybrid('water', 6, 'video')])
+
+    def test_other_kinds_keep_the_plain_query(self):
+        # Manual pages are most of the index and are never crowded out, so these searches keep the cheaper query.
+        with patch.object(server, 'search_ids', side_effect=AssertionError('filtered in the query'), create=True):
+            for kind in ('read', 'all'):
+                with self.subTest(find=kind):
+                    self.assertTrue(server.find('water', kind)['results'])
+            for kind in ('manual', 'any'):
+                with self.subTest(hybrid=kind):
+                    self.assertTrue(assistant.hybrid('water', 6, kind))
+
+    def test_transcript_without_a_video(self):
+        # Today Videos lists a transcript that has no video of its own, and the AI's search leaves it out.
+        self.assertIn('tx-alone', [r['id'] for r in server.find('rain barrel', 'video')['results']])
+        self.assertNotIn('tx-alone', [h['doc_id'] for h in assistant.hybrid('rain barrel', 6, 'video')])
 
 
 if __name__ == '__main__':
