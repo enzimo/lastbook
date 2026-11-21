@@ -237,8 +237,8 @@ class Merging(unittest.TestCase):
             mapmerge.merge_into(lib, self.sets['BB'])
 
 
-class Checklist(Base):
-    """Setup with the checklist: start(map_ids=[...])."""
+class StateMaps(Base):
+    """Three made-up states served as published state maps, with an address index each. No tests of its own."""
 
     def setUp(self):
         super().setUp()
@@ -300,6 +300,10 @@ class Checklist(Base):
         self.assertIsNone((note or {}).get('error'))
         api.opened(self.settings, lib, note)
         return lib
+
+
+class Checklist(StateMaps):
+    """Setup with the checklist: start(map_ids=[...])."""
 
     def test_add_a_second_state(self):
         lib = self.library(['AA'])

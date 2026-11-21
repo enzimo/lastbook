@@ -348,12 +348,21 @@ class Download:
     (default CONNECTIONS) is how many at once for a file of PARALLEL_MIN or more; 1 means one."""
 
     def __init__(self, url, dest, size, sha256, control, progress=lambda d, t, p: None, allowed=None, context=None, timeout=TIMEOUT,
-                 waiting=lambda s: None, connections=None):
-        self.url, self.dest, self.size, self.sha256 = url, str(dest), int(size), sha256.lower()
+                 waiting=lambda s: None, connections=None, span=None, url_size=None, expect_etag=None):
+        """span, url_size: this file is bytes span .. span+size-1 of the file at url, which is url_size bytes (a member of a pack zip,
+        engine/setup/custom.py). Every request then names a closed range, and a server that sends the whole file fails it.
+        sha256 None: no checksum for the whole (a run of members, each checked on its own once split). expect_etag: every answer
+        must carry this ETag, or the file on the server is another one than the index was read from (Failed 'changed')."""
+        self.url, self.dest, self.size = url, str(dest), int(size)
+        self.sha256 = sha256.lower() if sha256 else None
         self.part, self.meta = self.dest + '.part', self.dest + '.part.json'
         self.control, self.progress, self.waiting = control, progress, waiting
         self.allowed, self.context, self.timeout = allowed, context, timeout
         self.connections = connections
+        self.span, self.url_size, self.expect_etag = (int(span) if span is not None else None), url_size, expect_etag
+        self.offset = self.span or 0
+        self.total = int(url_size) if span is not None else self.size
+        self.etag = None
 
     def done_bytes(self):
         """Bytes from 0 that are surely the file's: the .part's length, or after pieces, the hashed run the .json records."""
@@ -396,6 +405,12 @@ class Download:
     def run(self):
         if os.path.isfile(self.dest) and os.path.getsize(self.dest) == self.size and not os.path.exists(self.part):
             return self.dest     # finished and checked before a restart
+        if self.size == 0:
+            if self.sha256 not in (None, hashlib.sha256(b'').hexdigest()):
+                raise BadChecksum('An empty file cannot match its published checksum.')
+            os.makedirs(os.path.dirname(self.dest) or '.', exist_ok=True)
+            open(self.dest, 'wb').close()
+            return self.dest
         os.makedirs(os.path.dirname(self.dest) or '.', exist_ok=True)
         meta = _load_meta(self.meta)
         if meta and (meta.get('sha256') != self.sha256 or meta.get('size') != self.size):
@@ -471,9 +486,10 @@ class Download:
                     raise Failed('network', f'The connection kept breaking ({type(e).__name__}). Check the internet connection, then try again.')
                 print(f'setup: download broke at {start} of {self.size}: {type(e).__name__}: {e}; trying again', flush=True)
                 self.control.sleep(BACKOFF[min(tries, len(BACKOFF) - 1)])
-        if h.hexdigest() != self.sha256:
+        if self.sha256 is not None and h.hexdigest() != self.sha256:
             self.discard()
             raise BadChecksum('The downloaded file did not match its published checksum.')
+        self.etag = etag
         os.replace(self.part, self.dest)
         try:
             os.unlink(self.meta)
@@ -483,18 +499,22 @@ class Download:
 
     def _fetch(self, start, etag, h, ctx):
         """Reads until the end or a break. Returns (bytes done, etag). Raises _Restart when the server's file is not the one begun."""
-        conn, r, final = _open(self.url, start, etag, self.allowed, ctx, self.timeout)
+        end = self.offset + self.size - 1 if self.span is not None else None
+        conn, r, final = _open(self.url, self.offset + start, etag, self.allowed, ctx, self.timeout, end=end)
         try:
             if r.status == 416 or r.status >= 400:
                 if 500 <= r.status < 600 or r.status == 429:
                     raise _Busy(r.status, r.getheader('Retry-After'))
                 raise Failed('network', f'The download server refused the file (HTTP {r.status}).')
             new_etag = r.getheader('ETag')
+            self._expected(new_etag)
             if r.status == 206:
                 cr = _content_range(r.getheader('Content-Range'))
-                if not cr or cr[0] != start or cr[1] != self.size or (etag and new_etag and new_etag != etag):
+                if not cr or cr[0] != self.offset + start or cr[1] != self.total or (etag and new_etag and new_etag != etag):
                     raise _Restart(new_etag)
             elif r.status == 200:
+                if self.span is not None:
+                    raise Failed('network', 'The download server sent a whole file where Lastbook asked for a part of it.')
                 if start:
                     raise _Restart(new_etag, whole=True)    # the server sent the whole file again: its copy changed, or it ignores Range
                 length = r.getheader('Content-Length')
@@ -533,6 +553,11 @@ class Download:
             except OSError:
                 pass
 
+
+    def _expected(self, etag):
+        if self.expect_etag and etag and etag != self.expect_etag:
+            raise Failed('changed', 'The library on the download server changed since Lastbook read its list of files. '
+                                    'Go back and choose again; what you picked is kept.')
 
     # ------------------------------------------------------------------------------------------ several connections --
     def _run_parallel(self, h, start, etag, ctx):
@@ -645,13 +670,16 @@ class Download:
             if st.stopping.is_set():
                 return
             try:
-                conn, r, _ = _open(self.url, pos, st.etag, self.allowed, ctx, self.timeout, end=b - 1, opened=st.opened,
-                                   stopping=st.stopping)
+                conn, r, _ = _open(self.url, self.offset + pos, st.etag, self.allowed, ctx, self.timeout, end=self.offset + b - 1,
+                                   opened=st.opened, stopping=st.stopping)
                 try:
                     if 500 <= r.status < 600 or r.status == 429:
                         raise _Busy(r.status, r.getheader('Retry-After'))     # up but busy: wait, as over one connection
                     if r.status >= 400:
                         raise Failed('network', f'The download server refused the file (HTTP {r.status}).')
+                    self._expected(r.getheader('ETag'))
+                    if r.status == 200 and self.span is not None:
+                        raise Failed('network', 'The download server sent a whole file where Lastbook asked for a part of it.')
                     if r.status == 200:
                         st.same(r.getheader('ETag'))      # a server that honours If-Range sends 200 when its copy changed
                         if not stray:                     # one 200 to a Range can be a passing hiccup at the edge: ask once more
@@ -665,10 +693,10 @@ class Download:
                     if r.status != 206:
                         raise OSError(f'HTTP {r.status}')
                     cr = _content_range(r.getheader('Content-Range'))
-                    if not cr or cr[0] != pos:
+                    if not cr or cr[0] != self.offset + pos:
                         raise _Restart(r.getheader('ETag'), whole=True)
-                    if cr[1] != self.size:
-                        raise BadChecksum(f'The file on the server is {cr[1]:,} bytes, not the {self.size:,} Lastbook expects.')
+                    if cr[1] != self.total:
+                        raise BadChecksum(f'The file on the server is {cr[1]:,} bytes, not the {self.total:,} Lastbook expects.')
                     st.same(r.getheader('ETag'))
                     f.seek(pos)
                     while pos < b:

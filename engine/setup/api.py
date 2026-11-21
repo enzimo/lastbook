@@ -24,7 +24,7 @@ import uuid
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
-from . import download, hardware, install, mapmerge
+from . import custom, download, hardware, install, mapmerge
 from .manifest import Manifest
 
 DATA_NAME = install.DATA_NAME
@@ -32,7 +32,7 @@ WORK_SUFFIX = '.setup'
 SAVE_EVERY = 2.0
 RECOMMEND_MARGIN = 5 * 10 ** 9     # beyond what the install needs, so the disk is not left full
 RECOMMEND_MARGIN_MAX = 20 * 10 ** 9
-MAX_BODY = 64 * 1024
+MAX_BODY = 1024 * 1024      # a Custom library's choice can list thousands of single records
 ACTIVE = ('waiting', 'downloading', 'verifying', 'unpacking', 'activating')
 
 
@@ -118,6 +118,8 @@ class Setup:
         self.ai_measure, self.measuring = None, False
         self.deleting = set()
         self.rejected = {}         # path -> (size, mtime) of a file already here that failed its SHA-256: not offered or used again
+        self.custom = {'state': 'idle'}   # reading the All library's list for a Custom library (engine/setup/custom.py)
+        self._index, self._guides = None, None
         self.job = self._load_job()
 
     # ------------------------------------------------------------------------------------------------- saved state --
@@ -189,7 +191,13 @@ class Setup:
         mapset = _checked_mapset(plan.get('mapset'), maps)
         if plan.get('mapset') and not mapset:
             return None
-        wanted = ({('pack', pack['id']) if pack else None, ('model', model['id']) if model else None, ('mapset', 'combine') if mapset else None}
+        cust = None
+        if plan.get('custom') is not None:
+            cust = self._checked_custom(plan['custom'])
+            if not cust:
+                return None
+        wanted = ({('pack', pack['id']) if pack else None, ('custom', 'custom') if cust else None, ('model', model['id']) if model else None,
+                   ('mapset', 'combine') if mapset else None}
                   | {('map', m['id']) for m in maps} | {('addresses', a['id']) for a in addresses}) - {None}
         if {(i.get('kind'), i.get('id')) for i in items} != wanted or len(items) != len(wanted):
             return None
@@ -197,9 +205,9 @@ class Setup:
                  + [f['name'] for a in addresses for f in a['files']] + ([model['file']] if model else []))
         sources = {n: str(v) for n, v in (plan.get('sources') or {}).items()
                    if n in names and isinstance(v, str) and Path(v).name == n and Path(v).is_file()}
-        switch = bool(plan.get('switch')) and pack is not None
+        switch = bool(plan.get('switch')) and (pack is not None or cust is not None)
         drop = [x for x in (plan.get('drop_addresses') or []) if isinstance(x, str) and re.fullmatch(r'[A-Z]{2}', x)]
-        clean = {'pack': pack, 'model': model, 'maps': maps, 'mapset': mapset, 'addresses': addresses, 'drop_addresses': drop,
+        clean = {'pack': pack, 'custom': cust, 'model': model, 'maps': maps, 'mapset': mapset, 'addresses': addresses, 'drop_addresses': drop,
                  'parent': str(parent), 'target': str(target), 'work': str(work),
                  'sources': sources, 'explicit': bool(plan.get('explicit')), 'retried': {}, 'switch': switch, 'repair': bool(plan.get('repair'))}
         if isinstance(plan.get('damaged'), list):
@@ -225,7 +233,7 @@ class Setup:
         if was == 'unpacking' and it['kind'] == 'addresses' and entry:
             total = entry['installed_bytes']
             return min(_tree_size(Path(plan['work']) / 'unpack-addresses'), total), total
-        if it['kind'] == 'mapset':
+        if it['kind'] in ('mapset', 'custom'):
             return it.get('bytes_done', 0), it.get('bytes_total', 0)
         if was == 'unpacking' and plan.get('pack'):
             total = plan['pack']['installed_bytes']
@@ -462,7 +470,7 @@ class Setup:
         return self.current.parent if self.current else self.default_parent
 
     def start(self, pack_id=None, ai=False, folder=None, sources=None, explicit=False, repair=False, map_id=None, address_id=None,
-              map_ids=None):
+              map_ids=None, custom_selection=None):
         """map_ids (a list): the states whose detailed map the library should hold, all of them, as the checklist shows them.
         Their address indexes follow: added for states ticked, removed for states unticked. Without it, map_id and address_id
         work as before (one state, which replaces the map there)."""
@@ -475,6 +483,14 @@ class Setup:
             if pack_id and (not pack or not pack['available']):
                 return {'error': 'That library is not available yet.', 'code': 'unavailable'}
             cur = self.current_info() or {}
+            cust, custom_files = None, None
+            if custom_selection is not None:
+                if pack_id:
+                    return {'error': 'Choose a pack or a Custom library, not both.', 'code': 'invalid'}
+                planned = self._plan_custom(custom_selection, cur, map_ids)
+                if 'error' in planned:
+                    return planned
+                cust, custom_files = planned['custom'], planned['fetch_bytes']
             if folder and self.current and install._real(Path(folder).expanduser()) == install._real(self.current):
                 folder = None
             same_revision = pack and (not pack.get('revision') or pack['revision'] == cur.get('content_revision', ''))
@@ -515,9 +531,13 @@ class Setup:
                 if 'error' in planned:
                     return planned
                 maps, mapset, addresses, drop, copy_bytes = planned['maps'], planned['mapset'], planned['addresses'], planned['drop'], planned['copy_bytes']
-            if self.mode == 'first-run' and not pack and (model or maps or addresses):
+            if cust:
+                if not map_ids and cur.get('map') != 'us' and not (cur.get('maps') and target == self.current):
+                    return {'error': 'Tick at least one state: a Custom library takes its map from the states you choose.', 'code': 'invalid'}
+                cust['carry'] = self._custom_carry(cur, target, mapset, maps)
+            if self.mode == 'first-run' and not pack and not cust and (model or maps or addresses):
                 return {'error': 'Choose a library first.', 'code': 'nothing'}
-            if not pack and not model and not maps and not mapset and not addresses:
+            if not pack and not cust and not model and not maps and not mapset and not addresses:
                 if self.mode == 'first-run':
                     return {'error': 'Choose a library first.', 'code': 'nothing'}
                 if drop and target == self.current:      # only address indexes to remove: done now, nothing to download
@@ -547,6 +567,8 @@ class Setup:
                      + [f['name'] for m in maps for f in m['files']] + [f['name'] for a in addresses for f in a['files']])
             have = set(srcs)
             need = install.need_bytes(pack, model, have) + sum(_map_need(m, have) for m in maps) + sum(_map_need(a, have) for a in addresses) + copy_bytes
+            if cust:
+                need += custom_files + custom.RUN_MAX * custom.WORKERS + (cur.get('map_bytes') or 0 if cust['carry'] == 'copy' else 0)
             preserve_map = bool(pack and cur.get('pack') == pack['id'] and target == self.current and not maps and not mapset and cur.get('map') not in (None, 'base'))
             if preserve_map:
                 need += cur['map_bytes']
@@ -566,6 +588,9 @@ class Setup:
             if pack:
                 items.append({'id': pack['id'], 'kind': 'pack', 'title': pack['title'], 'state': 'waiting', 'bytes_done': 0,
                               'bytes_total': pack['download_bytes'], 'rate_bps': 0, 'eta_s': None, 'error': None})
+            if cust:
+                items.append({'id': 'custom', 'kind': 'custom', 'title': 'Custom library', 'state': 'waiting', 'bytes_done': 0,
+                              'bytes_total': custom_files, 'rate_bps': 0, 'eta_s': None, 'error': None})
             for mp in maps:        # after the pack: with a pack, the map replaces the pack's own map set in the staged library
                 items.append({'id': mp['id'], 'kind': 'map', 'title': mp['title'], 'state': 'waiting', 'bytes_done': 0,
                               'bytes_total': mp['download_bytes'], 'rate_bps': 0, 'eta_s': None, 'error': None})
@@ -580,10 +605,10 @@ class Setup:
                               'bytes_total': model['size'], 'rate_bps': 0, 'eta_s': None, 'error': None})
             self.job = {'id': uuid.uuid4().hex[:12], 'state': 'waiting', 'items': items, 'error': None, 'started': _now(),
                         'folder': str(target),
-                        'plan': {'pack': pack, 'model': model, 'maps': maps, 'mapset': mapset, 'addresses': addresses, 'drop_addresses': drop,
+                        'plan': {'pack': pack, 'custom': cust, 'model': model, 'maps': maps, 'mapset': mapset, 'addresses': addresses, 'drop_addresses': drop,
                                  'parent': str(parent), 'target': str(target), 'work': str(work),
                                  'sources': {k: v for k, v in srcs.items() if k in names}, 'explicit': explicit,
-                                 'retried': {}, 'switch': bool(pack)}}
+                                 'retried': {}, 'switch': bool(pack or cust)}}
             s = self._settings()
             s['work'] = str(work)
             self._save_settings(s)
@@ -640,6 +665,184 @@ class Setup:
                 addresses.append(entry)
         drop = sorted(have - set(wanted)) if in_place else []
         return {'maps': maps, 'mapset': mapset, 'addresses': addresses, 'drop': drop, 'copy_bytes': copy_bytes}
+
+    # ---------------------------------------------------------------------------------------- a Custom library --
+    def _index_dir(self):
+        return self.settings_dir / 'setup' / 'all-index'
+
+    def _all_pack(self):
+        p = self.manifest.pack('all')
+        return p if p and p.get('available') and len(p.get('files') or []) == 1 else None
+
+    def index(self):
+        """The All library's list, read before and still for the All zip the manifest offers, or None."""
+        allp = self._all_pack()
+        if not allp:
+            return None
+        if self._index is None or not self._index.matches(allp):
+            self._index = custom.load_index(self._index_dir(), allp)
+        return self._index
+
+    def guides(self):
+        if self._guides is None:
+            base = Path(getattr(sys, '_MEIPASS', Path(sys.executable).parent)) if getattr(sys, 'frozen', False) else Path(__file__).resolve().parents[2]
+            self._guides = custom.guide_ids(base / 'content' / 'topics')
+        return self._guides
+
+    def custom_state(self):
+        """For the screen: whether the All library's list is here, being read or failed, and once here, the groups to choose
+        from, the bytes every Custom library has, and the open library's own selection when it is a Custom one."""
+        self.manifest.fetch_once()
+        with self.lock:
+            st = dict(self.custom)
+        if not self._all_pack():
+            return {'state': 'unavailable', 'error': 'The All library is not offered, so there is nothing to choose from.'}
+        idx = self.index() if st['state'] != 'loading' else None
+        if not idx:
+            return st if st['state'] != 'ready' else {'state': 'idle'}
+        core = custom.files_for(idx, custom.resolve(idx, {'groups': [], 'add': [], 'remove': []}, self.guides()))
+        selection = None
+        if self.current:
+            try:
+                d = json.loads((self.current / 'pack.json').read_text(encoding='utf-8'))
+                selection = custom.clean_selection(d.get('selection')) if d.get('name') == 'custom' else None
+            except (OSError, ValueError, AttributeError):
+                pass
+        return {'state': 'ready', 'groups': custom.groups(idx, self.guides()), 'core_bytes': sum(r[0] for r in core.values()),
+                'read': idx.meta.get('read'), 'selection': selection}
+
+    def custom_load(self):
+        """Reads the All library's list (about 30 MB) from the download server: only when the person opens Custom."""
+        allp = self._all_pack()
+        if not allp:
+            return {'error': 'The All library is not offered, so there is nothing to choose from.', 'code': 'unavailable'}
+        with self.lock:
+            if self.custom['state'] == 'loading':
+                return dict(self.custom)
+            if self.index():
+                return self.custom_state()
+            self.custom = {'state': 'loading', 'done': 0, 'total': 0}
+
+        def run():
+            def progress(done, total):
+                with self.lock:
+                    self.custom.update(done=done, total=total)
+            try:
+                idx = custom.read_index(allp, self._index_dir(), download.Control(), progress, allowed=self.allowed, context=self.context)
+                with self.lock:
+                    self._index, self.custom = idx, {'state': 'ready'}
+            except (download.Failed, download.Stopped, install.Refused, OSError, ValueError) as e:
+                traceback.print_exc()
+                msg = getattr(e, 'message', None) or f'Lastbook could not read the All library’s list ({type(e).__name__}).'
+                with self.lock:
+                    self.custom = {'state': 'failed', 'error': msg}
+        threading.Thread(target=run, daemon=True, name='setup-custom-index').start()
+        return dict(self.custom)
+
+    def custom_items(self, group):
+        idx = self.index()
+        if not idx:
+            return {'error': 'Read the All library’s list first.', 'code': 'custom_index'}
+        if not isinstance(group, str) or len(group) > 200:
+            return {'error': 'bad request', 'code': 'invalid'}
+        return {'group': group, 'items': custom.items(idx, group, self.guides())}
+
+    def _plan_custom(self, selection, cur, map_ids):
+        idx = self.index()
+        if not idx:
+            return {'error': 'The All library’s list is not read yet. Open Custom again.', 'code': 'custom_index'}
+        sel = custom.clean_selection(selection)
+        if sel is None:
+            return {'error': 'That choice is not one Lastbook can read.', 'code': 'invalid'}
+        kept = custom.resolve(idx, sel, self.guides())
+        if not any(custom._choosable(idx.by_id[k]) for k in kept):
+            return {'error': 'Nothing is chosen yet.', 'code': 'nothing'}
+        files = custom.files_for(idx, kept)
+        same_disk = self.current and _same_disk(self.current, self.current.parent)
+        reuse = custom.reusable(self.current, files) if same_disk else set()
+        fetch = sum(row[0] for rel, row in files.items() if rel not in reuse)
+        return {'custom': {'selection': sel, 'etag': idx.etag, 'key': custom.selection_key(sel, idx.etag)}, 'fetch_bytes': fetch}
+
+    def _custom_carry(self, cur, target, mapset, maps):
+        """What the new Custom library takes of the open library's map: 'link' it as it is (no change to the states), 'copy' it to
+        be added to or cut down (a mapset that starts from it), or nothing (the map is built from the states downloaded)."""
+        if not self.current or target != self.current or not install.map_files(self.current):
+            return None
+        if mapset and mapset['base'] in ('keep', 'derive'):
+            return 'copy'
+        if not maps and not mapset:
+            return 'link'
+        return None
+
+    def _checked_custom(self, c):
+        if not isinstance(c, dict):
+            return None
+        idx = self.index()
+        sel = custom.clean_selection(c.get('selection'))
+        if not idx or sel is None or c.get('etag') != idx.etag:
+            return None
+        carry = c.get('carry') if c.get('carry') in ('link', 'copy') else None
+        return {'selection': sel, 'etag': idx.etag, 'key': custom.selection_key(sel, idx.etag), 'carry': carry}
+
+    def _do_custom(self, it, plan, work, control):
+        """Builds the Custom library in unpack/LastbookData: files linked from the open library where they are the same, the
+        rest downloaded from the All zip by range (custom.fetch), then its own catalog, search index and lists. What is in place
+        is noted in the settings folder, so a stop carries on where it was."""
+        c = plan['custom']
+        idx = self.index()
+        if not idx or idx.etag != c['etag']:
+            raise download.Failed('changed', 'The All library on the download server changed since you chose. Go back and choose again.')
+        kept = custom.resolve(idx, c['selection'], self.guides())
+        files = custom.files_for(idx, kept)
+        staged = work / 'unpack'
+        _fresh_unpack(staged, {'custom': c['key']})
+        lib = staged / DATA_NAME
+        lib.mkdir(parents=True, exist_ok=True)
+        note = self.settings_dir / 'setup' / 'custom-done.txt'
+        try:
+            lines = note.read_text(encoding='utf-8').splitlines()
+            done = set(lines[1:]) if lines and lines[0] == c['key'] else set()
+        except OSError:
+            done = set()
+        done = {r for r in done if r in files and (lib / r).is_file() and (lib / r).stat().st_size == files[r][0]}
+        note.parent.mkdir(parents=True, exist_ok=True)
+        with open(note, 'w', encoding='utf-8') as f:
+            f.write(c['key'] + '\n' + ''.join(r + '\n' for r in sorted(done)))
+        mark_lock = threading.Lock()
+
+        def mark(rel):
+            with mark_lock, open(note, 'a', encoding='utf-8') as f:
+                f.write(rel + '\n')
+        total = sum(row[0] for row in files.values()) or 1
+        tracker = _Item(it)
+        self._set(it, 'downloading', bytes_done=0, bytes_total=total)
+        got = sum(files[r][0] for r in done)
+        reuse = custom.reusable(self.current, files) if self.current else set()
+        for rel in sorted(reuse - done):
+            control.check()
+            custom.link_or_copy(self.current / rel, lib / rel)
+            mark(rel)
+            done.add(rel)
+            got += files[rel][0]
+            tracker.progress(got, total, 'downloading')
+        todo = [r for r in files if r not in done]
+        base = got
+        custom.fetch(idx, todo, lib, work / 'downloads' / 'custom', control, lambda d, t: tracker.progress(base + d, total, 'downloading'),
+                     mark, allowed=self.allowed, context=self.context, waiting=tracker.waiting)
+        self._set(it, 'activating')
+        custom.finish_library(idx, lib, kept, c['selection'], files)
+        if c.get('carry') and self.current:
+            for rel in install.map_files(self.current):
+                control.check()
+                if c['carry'] == 'link':
+                    custom.link_or_copy(self.current / rel, lib / rel)
+                else:
+                    (lib / rel).parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(self.current / rel, lib / rel)
+        try:
+            note.unlink()
+        except OSError:
+            pass
 
     def _start_repair(self, ai):
         """Re-check the open library's files (pack-manifest.tsv) and the model's SHA-256. What is wrong is fetched again: the pack is
@@ -963,6 +1166,8 @@ class Setup:
                     continue
                 if it['kind'] == 'pack':
                     self._do_pack(it, plan, work, control)
+                elif it['kind'] == 'custom':
+                    self._do_custom(it, plan, work, control)
                 elif it['kind'] == 'map':
                     self._do_map(it, plan, work, control)
                 elif it['kind'] == 'mapset':
@@ -1505,7 +1710,11 @@ ROUTES = {
     ('GET', 'state'): lambda s, b: s.state(),
     ('GET', 'job'): lambda s, b: s.public_job(),
     ('POST', 'start'): lambda s, b: s.start(b.get('pack'), bool(b.get('ai')), b.get('folder'), repair=bool(b.get('repair')), map_id=b.get('map') or None,
-                                            address_id=b.get('address_id') or None, map_ids=b.get('maps') if 'maps' in b else None),
+                                            address_id=b.get('address_id') or None, map_ids=b.get('maps') if 'maps' in b else None,
+                                            custom_selection=b.get('custom') if 'custom' in b else None),
+    ('GET', 'custom'): lambda s, b: s.custom_state(),
+    ('POST', 'custom-load'): lambda s, b: s.custom_load(),
+    ('POST', 'custom-items'): lambda s, b: s.custom_items(b.get('group')),
     ('POST', 'pause'): lambda s, b: s.pause(),
     ('POST', 'resume'): lambda s, b: s.resume(),
     ('POST', 'cancel'): lambda s, b: s.cancel(),
