@@ -154,3 +154,15 @@ html.plat-mac.in-app .s-top{padding-top:30px}   /* below the traffic lights of a
 .s-maplabel{display:block;margin:16px 0 8px;font-size:17px;font-weight:650}
 .s-map-panel .s-select{max-width:none;min-height:56px;font-size:18px}
 .s-map-panel .s-hint{margin-top:10px}
+/* the state checklist (enzimo fork): several state maps in one library */
+.s-checkbar{display:flex;align-items:center;gap:12px;margin:4px 0 10px}
+.s-find{max-width:320px;min-height:44px}
+.s-count{font-size:15px;color:var(--ink2);white-space:nowrap}
+.s-checks{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:6px 12px;max-height:340px;overflow:auto;padding:6px;border-radius:12px;background:var(--paper);border:1.5px solid var(--line)}
+.s-check{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:8px;font-size:16px;cursor:pointer}
+.s-check[hidden]{display:none}
+.s-check:has(input:checked){background:color-mix(in srgb,var(--accent) 9%,transparent)}
+.s-check input{flex:none;width:19px;height:19px;margin:0;accent-color:var(--accent)}
+.s-check span{flex:1;min-width:0}
+.s-check small{color:var(--ink2);font-size:13.5px;white-space:nowrap}
+.s-check.off{opacity:.55;cursor:default}

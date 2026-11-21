@@ -300,12 +300,15 @@ def old_name(target):
     return p
 
 
-def stage_switch(pend, new_lib, target, model_file=None, kind=None, model_sha256=None):
+def stage_switch(pend, new_lib, target, model_file=None, kind=None, model_sha256=None, drop_addresses=None):
     """Writes what the switch will do to `pend`, a file in the app's own settings folder (never the work folder), for
-    apply_pending. Nothing is renamed yet."""
+    apply_pending. Nothing is renamed yet. drop_addresses: state codes whose address index goes once the switch is made
+    (states taken off the map)."""
     d = {'new': str(new_lib), 'target': str(target), 'model_file': model_file, 'written': time.time()}
     if kind:
         d['kind'] = kind
+    if drop_addresses:
+        d['drop_addresses'] = sorted(drop_addresses)
     if model_sha256:
         d['model_sha256'] = model_sha256     # the digest setup matched, for llm_local.mark_checked after the switch
     Path(pend).parent.mkdir(parents=True, exist_ok=True)
@@ -412,6 +415,16 @@ def map_name(lib):
         return 'base'
 
 
+def map_states(lib):
+    """The state codes whose detail the library's map holds: map-set.json's `states` (a combined set, engine/setup/mapmerge.py),
+    else its one state. None for the base or the whole US."""
+    d = map_set(lib)
+    if d and isinstance(d.get('states'), list):
+        return sorted(str(x) for x in d['states'] if isinstance(x, str) and re.fullmatch(r'[A-Z]{2}', x))
+    name = map_name(lib)
+    return [name] if re.fullmatch(r'[A-Z]{2}', name) else []
+
+
 def check_map(lib):
     """Every file map-set.json lists is there at its size, and each is a map file."""
     d = map_set(lib)
@@ -501,6 +514,20 @@ def replace_map_in(staged, new):
         os.replace(new / rel, staged / rel)
 
 
+def drop_address_indexes(lib, states):
+    """Removes the address indexes of these states (each <ST>.sqlite and its .json receipt) from the library."""
+    for st in states or ():
+        if not re.fullmatch(r'[A-Z]{2}', str(st)):
+            continue
+        for suffix in ('.sqlite', '.json') + tuple('.sqlite' + side for side in SQLITE_SIDES):
+            try:
+                os.unlink(Path(lib) / 'derived' / 'geo' / 'addresses' / (st + suffix))
+            except FileNotFoundError:
+                pass
+            except OSError as e:
+                print('setup: could not remove an address index:', type(e).__name__, e, flush=True)
+
+
 def _apply_map(work, pend, d, target, note):
     """A state map staged for the open library: swap its files in; if the library then does not check out, swap the old ones back."""
     old_dir = Path(work) / 'map-old'
@@ -532,6 +559,8 @@ def _apply_map(work, pend, d, target, note):
                 (target / rel).parent.mkdir(parents=True, exist_ok=True)
                 os.replace(Path(root, f), target / rel)
         note['error'] = 'The new map did not open, so Lastbook put the old one back.'
+    elif ok:
+        drop_address_indexes(target, d.get('drop_addresses'))
     return target if is_library(target) else None, note
 
 
@@ -556,6 +585,9 @@ def _pending_ok(d, work):
         return False
     sha = d.get('model_sha256')
     if sha is not None and not (isinstance(sha, str) and re.fullmatch(r'[0-9a-f]{64}', sha)):
+        return False
+    drop = d.get('drop_addresses')
+    if drop is not None and not (isinstance(drop, list) and all(isinstance(x, str) and re.fullmatch(r'[A-Z]{2}', x) for x in drop)):
         return False
     mf = d.get('model_file')
     if mf is not None and not (isinstance(mf, str) and _real(Path(mf).parent) == _real(target / 'models')):
@@ -604,6 +636,8 @@ def apply_pending(pend, work):
         carry_over(broken, target)      # the model file, moved into the new one, goes back too
         note['error'] = 'The new library did not open, so Lastbook put the old one back.'
         note['old'] = None
+    elif lib_ok:
+        drop_address_indexes(target, d.get('drop_addresses'))
     return target if is_library(target) else None, note
 
 

@@ -14,6 +14,7 @@ Such a request may not name folders or files on the server, and is never offered
 import hashlib
 import json
 import os
+import re
 import shutil
 import sys
 import threading
@@ -23,7 +24,7 @@ import uuid
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
-from . import download, hardware, install
+from . import download, hardware, install, mapmerge
 from .manifest import Manifest
 
 DATA_NAME = install.DATA_NAME
@@ -178,26 +179,36 @@ class Setup:
         work = _work_for(target)
         ids = lambda key: (plan.get(key) or {}).get('id')
         pack = self.manifest.pack(ids('pack')) if plan.get('pack') else None
-        mp = self.manifest.map(ids('map')) if plan.get('map') else None
         model = self.manifest.model(ids('model')) if plan.get('model') else None
-        addresses = self.manifest.address_index(ids('addresses')) if plan.get('addresses') else None
-        if plan.get('addresses') and not addresses:
+        if (plan.get('pack') and not pack) or (plan.get('model') and not model):
             return None
-        if (plan.get('pack') and not pack) or (plan.get('map') and not mp) or (plan.get('model') and not model):
+        maps = _entries(plan, 'maps', 'map', self.manifest.map)
+        addresses = _entries(plan, 'addresses', None, self.manifest.address_index)
+        if maps is None or addresses is None:
             return None
-        wanted = {('pack', pack['id']) if pack else None, ('map', mp['id']) if mp else None, ('model', model['id']) if model else None, ('addresses', addresses['id']) if addresses else None} - {None}
-        if {(i.get('kind'), i.get('id')) for i in items} != wanted:
+        mapset = _checked_mapset(plan.get('mapset'), maps)
+        if plan.get('mapset') and not mapset:
             return None
-        names = ([f['name'] for f in pack['files']] if pack else []) + ([f['name'] for f in mp['files']] if mp else []) + ([f['name'] for f in addresses['files']] if addresses else []) + ([model['file']] if model else [])
+        wanted = ({('pack', pack['id']) if pack else None, ('model', model['id']) if model else None, ('mapset', 'combine') if mapset else None}
+                  | {('map', m['id']) for m in maps} | {('addresses', a['id']) for a in addresses}) - {None}
+        if {(i.get('kind'), i.get('id')) for i in items} != wanted or len(items) != len(wanted):
+            return None
+        names = (([f['name'] for f in pack['files']] if pack else []) + [f['name'] for m in maps for f in m['files']]
+                 + [f['name'] for a in addresses for f in a['files']] + ([model['file']] if model else []))
         sources = {n: str(v) for n, v in (plan.get('sources') or {}).items()
                    if n in names and isinstance(v, str) and Path(v).name == n and Path(v).is_file()}
         switch = bool(plan.get('switch')) and pack is not None
-        clean = {'pack': pack, 'model': model, 'map': mp, 'addresses': addresses, 'parent': str(parent), 'target': str(target), 'work': str(work),
+        drop = [x for x in (plan.get('drop_addresses') or []) if isinstance(x, str) and re.fullmatch(r'[A-Z]{2}', x)]
+        clean = {'pack': pack, 'model': model, 'maps': maps, 'mapset': mapset, 'addresses': addresses, 'drop_addresses': drop,
+                 'parent': str(parent), 'target': str(target), 'work': str(work),
                  'sources': sources, 'explicit': bool(plan.get('explicit')), 'retried': {}, 'switch': switch, 'repair': bool(plan.get('repair'))}
         if isinstance(plan.get('damaged'), list):
             clean['damaged'] = [str(x) for x in plan['damaged']]
         if plan.get('map_new'):
             clean['map_new'] = str(work / 'unpack-map' / DATA_NAME)
+        if mapset and plan.get('mapset_ready'):
+            clean['mapset_ready'] = True
+            clean['mapset_merged'] = [x for x in (plan.get('mapset_merged') or []) if x in {m['id'] for m in maps}]
         if plan.get('model_file') and model:
             clean['model_file'] = str((target if switch else Path(self.current or target)) / 'models' / model['file'])
             if plan.get('model_sha256'):
@@ -207,12 +218,15 @@ class Setup:
 
     def _done_after_restart(self, plan, it, was):
         """(bytes done, bytes total) for an item found mid-run at startup, from what is on disk for the step it was in."""
-        if was == 'unpacking' and it['kind'] == 'map' and plan.get('map'):
-            total = plan['map']['installed_bytes']
-            return min(_tree_size(Path(plan['work']) / 'unpack-map'), total), total
-        if was == 'unpacking' and it['kind'] == 'addresses' and plan.get('addresses'):
-            total = plan['addresses']['installed_bytes']
+        entry = _entry_for(plan, it)
+        if was == 'unpacking' and it['kind'] == 'map' and entry:
+            total = entry['installed_bytes']
+            return min(_tree_size(_map_unpack_dir(plan, entry)), total), total
+        if was == 'unpacking' and it['kind'] == 'addresses' and entry:
+            total = entry['installed_bytes']
             return min(_tree_size(Path(plan['work']) / 'unpack-addresses'), total), total
+        if it['kind'] == 'mapset':
+            return it.get('bytes_done', 0), it.get('bytes_total', 0)
         if was == 'unpacking' and plan.get('pack'):
             total = plan['pack']['installed_bytes']
             return min(_tree_size(Path(plan['work']) / 'unpack'), total), total
@@ -223,14 +237,15 @@ class Setup:
     @staticmethod
     def _on_disk(plan, it):
         """Bytes of this item already downloaded, from the files themselves."""
+        entry = _entry_for(plan, it)
         if it['kind'] == 'pack' and plan.get('pack'):
             plan_files = plan['pack']['files']
-        elif it['kind'] == 'map' and plan.get('map'):
-            plan_files = plan['map']['files']
-        elif it['kind'] == 'addresses' and plan.get('addresses'):
-            plan_files = plan['addresses']['files']
-        else:
+        elif it['kind'] in ('map', 'addresses'):
+            plan_files = entry['files'] if entry else []
+        elif it['kind'] == 'model':
             plan_files = [{'name': plan['model']['file']}] if plan.get('model') else []
+        else:
+            plan_files = []
         n = 0
         for f in plan_files:
             for p in (Path(plan['work']) / 'downloads' / f['name'], Path(plan['work']) / 'downloads' / (f['name'] + '.part')):
@@ -277,7 +292,7 @@ class Setup:
             p = self.current / 'models' / m['file']
             if p.is_file() and p.stat().st_size == m['size']:
                 model = m['id']
-        return {'folder': str(self.current), 'pack': pack, 'content_revision': revision, 'map_bytes': install.map_bytes(self.current), 'model': model, 'map': install.map_name(self.current), 'address_indexes': self.address_indexes(), 'old': self._settings().get('old', [])}
+        return {'folder': str(self.current), 'pack': pack, 'content_revision': revision, 'map_bytes': install.map_bytes(self.current), 'model': model, 'map': install.map_name(self.current), 'maps': install.map_states(self.current), 'address_indexes': self.address_indexes(), 'old': self._settings().get('old', [])}
 
     def address_indexes(self):
         if not self.current:
@@ -446,7 +461,11 @@ class Setup:
             return p.parent if p.name == DATA_NAME else p
         return self.current.parent if self.current else self.default_parent
 
-    def start(self, pack_id=None, ai=False, folder=None, sources=None, explicit=False, repair=False, map_id=None, address_id=None):
+    def start(self, pack_id=None, ai=False, folder=None, sources=None, explicit=False, repair=False, map_id=None, address_id=None,
+              map_ids=None):
+        """map_ids (a list): the states whose detailed map the library should hold, all of them, as the checklist shows them.
+        Their address indexes follow: added for states ticked, removed for states unticked. Without it, map_id and address_id
+        work as before (one state, which replaces the map there)."""
         if repair:
             return self._start_repair(ai)
         with self.lock:
@@ -464,34 +483,46 @@ class Setup:
             model = self.manifest.model() if ai else None
             if ai and not model:
                 return {'error': 'No local AI is offered for this version.', 'code': 'unavailable'}
-            mp = self.manifest.map(map_id) if map_id else None
-            if map_id and (not mp or not mp['available']):
-                return {'error': 'That state’s map is not available yet.', 'code': 'unavailable'}
-            requested_address = address_id
-            address_id = address_id or map_id or (pack or {}).get('map') or cur.get('map')
-            if address_id in ('base', 'us'):
-                address_id = next(iter(cur.get('address_indexes', [])), None)
-            addresses = self.manifest.address_index(address_id) if address_id else None
-            if not addresses or not addresses['available']:
-                if requested_address:
-                    return {'error': 'That state’s address search is not available yet.', 'code': 'unavailable'}
-                addresses = None
+            if map_ids is None:
+                mp = self.manifest.map(map_id) if map_id else None
+                if map_id and (not mp or not mp['available']):
+                    return {'error': 'That state’s map is not available yet.', 'code': 'unavailable'}
+                requested_address = address_id
+                address_id = address_id or map_id or (pack or {}).get('map') or cur.get('map')
+                if address_id in ('base', 'us'):
+                    address_id = next(iter(cur.get('address_indexes', [])), None)
+                addresses = self.manifest.address_index(address_id) if address_id else None
+                if not addresses or not addresses['available']:
+                    if requested_address:
+                        return {'error': 'That state’s address search is not available yet.', 'code': 'unavailable'}
+                    addresses = None
             if folder and self.current and install._real(Path(folder).expanduser()) == install._real(self.current):
                 folder = None      # the window sends the shown folder, which in manage mode is the open library itself
             parent = self._parent_for(folder)
             target = self.current if self.current and not folder else parent / DATA_NAME   # the open library as it is, whatever its name
             parent = target.parent
-            if addresses and addresses['id'] in cur.get('address_indexes', []) and target == self.current:
-                addresses = None
             if model and cur.get('model') and target == self.current:
                 model = None       # already here, and an upgrade in place carries it over
-            if mp and not pack and cur.get('map') == mp['id']:
-                mp = None          # this state's map is the one here already
-            if self.mode == 'first-run' and not pack and (model or mp or addresses):
+            mapset, drop, copy_bytes = None, [], 0
+            if map_ids is None:
+                if addresses and addresses['id'] in cur.get('address_indexes', []) and target == self.current:
+                    addresses = None
+                if mp and not pack and cur.get('map') == mp['id']:
+                    mp = None          # this state's map is the one here already
+                maps, addresses = [mp] if mp else [], [addresses] if addresses else []
+            else:
+                planned = self._plan_maps(pack, cur, target, map_ids)
+                if 'error' in planned:
+                    return planned
+                maps, mapset, addresses, drop, copy_bytes = planned['maps'], planned['mapset'], planned['addresses'], planned['drop'], planned['copy_bytes']
+            if self.mode == 'first-run' and not pack and (model or maps or addresses):
                 return {'error': 'Choose a library first.', 'code': 'nothing'}
-            if not pack and not model and not mp and not addresses:
+            if not pack and not model and not maps and not mapset and not addresses:
                 if self.mode == 'first-run':
                     return {'error': 'Choose a library first.', 'code': 'nothing'}
+                if drop and target == self.current:      # only address indexes to remove: done now, nothing to download
+                    install.drop_address_indexes(self.current, drop)
+                    return {'removed': drop}
                 return {'error': 'Nothing to add: this library and the local AI are already here.', 'code': 'nothing'}
             try:
                 parent.mkdir(parents=True, exist_ok=True)
@@ -512,10 +543,11 @@ class Setup:
             for f in self.found():
                 if f.get('size_ok') and f['name'] not in srcs and f['kind'] in ('pack', 'model', 'map', 'addresses'):
                     srcs[f['name']] = f['path']
-            names = ([f['name'] for f in pack['files']] if pack else []) + ([model['file']] if model else []) + ([f['name'] for f in mp['files']] if mp else []) + ([f['name'] for f in addresses['files']] if addresses else [])
+            names = (([f['name'] for f in pack['files']] if pack else []) + ([model['file']] if model else [])
+                     + [f['name'] for m in maps for f in m['files']] + [f['name'] for a in addresses for f in a['files']])
             have = set(srcs)
-            need = install.need_bytes(pack, model, have) + _map_need(mp, have) + _map_need(addresses, have)
-            preserve_map = bool(pack and cur.get('pack') == pack['id'] and target == self.current and not mp and cur.get('map') not in (None, 'base'))
+            need = install.need_bytes(pack, model, have) + sum(_map_need(m, have) for m in maps) + sum(_map_need(a, have) for a in addresses) + copy_bytes
+            preserve_map = bool(pack and cur.get('pack') == pack['id'] and target == self.current and not maps and not mapset and cur.get('map') not in (None, 'base'))
             if preserve_map:
                 need += cur['map_bytes']
             for name in names:     # what an earlier run already downloaded is on the disk already
@@ -534,18 +566,22 @@ class Setup:
             if pack:
                 items.append({'id': pack['id'], 'kind': 'pack', 'title': pack['title'], 'state': 'waiting', 'bytes_done': 0,
                               'bytes_total': pack['download_bytes'], 'rate_bps': 0, 'eta_s': None, 'error': None})
-            if mp:                 # after the pack: with a pack, the map replaces the pack's own map set in the staged library
+            for mp in maps:        # after the pack: with a pack, the map replaces the pack's own map set in the staged library
                 items.append({'id': mp['id'], 'kind': 'map', 'title': mp['title'], 'state': 'waiting', 'bytes_done': 0,
                               'bytes_total': mp['download_bytes'], 'rate_bps': 0, 'eta_s': None, 'error': None})
-            if addresses:
-                items.append({'id': addresses['id'], 'kind': 'addresses', 'title': addresses['title'] + ' address search', 'state': 'waiting', 'bytes_done': 0,
-                              'bytes_total': addresses['download_bytes'], 'rate_bps': 0, 'eta_s': None, 'error': None})
+            if mapset:             # then the states are put together into one map set (engine/setup/mapmerge.py)
+                items.append({'id': 'combine', 'kind': 'mapset', 'title': _mapset_title(mapset['states']), 'state': 'waiting', 'bytes_done': 0,
+                              'bytes_total': sum(m['installed_bytes'] for m in maps) + copy_bytes, 'rate_bps': 0, 'eta_s': None, 'error': None})
+            for entry in addresses:
+                items.append({'id': entry['id'], 'kind': 'addresses', 'title': entry['title'] + ' address search', 'state': 'waiting', 'bytes_done': 0,
+                              'bytes_total': entry['download_bytes'], 'rate_bps': 0, 'eta_s': None, 'error': None})
             if model:
                 items.append({'id': model['id'], 'kind': 'model', 'title': model['title'], 'state': 'waiting', 'bytes_done': 0,
                               'bytes_total': model['size'], 'rate_bps': 0, 'eta_s': None, 'error': None})
             self.job = {'id': uuid.uuid4().hex[:12], 'state': 'waiting', 'items': items, 'error': None, 'started': _now(),
                         'folder': str(target),
-                        'plan': {'pack': pack, 'model': model, 'map': mp, 'addresses': addresses, 'parent': str(parent), 'target': str(target), 'work': str(work),
+                        'plan': {'pack': pack, 'model': model, 'maps': maps, 'mapset': mapset, 'addresses': addresses, 'drop_addresses': drop,
+                                 'parent': str(parent), 'target': str(target), 'work': str(work),
                                  'sources': {k: v for k, v in srcs.items() if k in names}, 'explicit': explicit,
                                  'retried': {}, 'switch': bool(pack)}}
             s = self._settings()
@@ -555,6 +591,55 @@ class Setup:
             self._save_job()
             self._run()
             return self.public_job()
+
+    def _plan_maps(self, pack, cur, target, map_ids):
+        """What a checklist of states asks for. The map the library starts from is the pack's own when a pack comes with the
+        job (Small: the base, Medium: California, All: the whole US), else the open library's. Returns {maps: entries to
+        download, mapset: how to put them together or None, addresses: indexes to download, drop: indexes to remove,
+        copy_bytes: room for a copy of the map there now}, or an error answer.
+
+        - The same states as there now: no map work.
+        - Only states added: those are downloaded and added to a copy of the map there now ('keep').
+        - No state left: the base is cut out of the map there now ('derive').
+        - Otherwise every ticked state is downloaded and the map is built from them alone ('first'): a combined map cannot be
+          taken apart again. One state so is just that state's map set, as before this checklist existed."""
+        if not isinstance(map_ids, list) or not all(isinstance(x, str) and re.fullmatch(r'[A-Z]{2}', x) for x in map_ids):
+            return {'error': 'That list of states is not one Lastbook can read.', 'code': 'invalid'}
+        wanted = sorted(set(map_ids))
+        for st in wanted:
+            if not self.manifest.map(st) and not self.manifest.address_index(st):
+                return {'error': f'Lastbook has no map for {st}.', 'code': 'unavailable'}
+        in_place = target == self.current
+        if pack:
+            own = pack.get('map') or PACK_MAPS.get(pack['id'], 'base')
+            start = 'us' if own == 'us' else ([] if own == 'base' else [own])
+        else:
+            start = 'us' if cur.get('map') == 'us' else list(cur.get('maps') or [])
+        maps, mapset, copy_bytes = [], None, 0
+        if start != 'us' and set(wanted) != set(start):
+            if start and set(wanted) > set(start):
+                base, fetch = 'keep', [x for x in wanted if x not in start]
+            elif not wanted:
+                base, fetch = 'derive', []
+            else:
+                base, fetch = 'first', wanted
+            for st in fetch:
+                mp = self.manifest.map(st)
+                if not mp or not mp['available']:
+                    return {'error': f'The map of {st} is not available yet.', 'code': 'unavailable'}
+                maps.append(mp)
+            if not (base == 'first' and len(maps) == 1):
+                mapset = {'base': base, 'states': wanted}
+                if base != 'first' and not pack:
+                    copy_bytes = cur.get('map_bytes') or 0        # the map there now is copied, then added to or cut down
+        have = set(cur.get('address_indexes') or []) if in_place else set()
+        addresses = []
+        for st in wanted:
+            entry = self.manifest.address_index(st)
+            if st not in have and entry and entry['available']:
+                addresses.append(entry)
+        drop = sorted(have - set(wanted)) if in_place else []
+        return {'maps': maps, 'mapset': mapset, 'addresses': addresses, 'drop': drop, 'copy_bytes': copy_bytes}
 
     def _start_repair(self, ai):
         """Re-check the open library's files (pack-manifest.tsv) and the model's SHA-256. What is wrong is fetched again: the pack is
@@ -577,23 +662,30 @@ class Setup:
             if model:
                 items.append({'id': model['id'], 'kind': 'model', 'title': model['title'], 'state': 'waiting', 'bytes_done': 0,
                               'bytes_total': model['size'], 'rate_bps': 0, 'eta_s': None, 'error': None})
-            mp = None
+            maps, mapset = [], None
             if _separate_map(target):
                 try:                 # a state map's files come from its own download, not the pack's: the pack check skips them
                     install.check_map(target)
                 except install.Refused as e:
                     print('setup: repair:', e.message, flush=True)
-                    mp = self.manifest.map(cur['map'])
-                    if not mp or not mp['available']:
+                    states = install.map_states(target)
+                    maps = [self.manifest.map(st) for st in states]
+                    if not states or not all(m and m['available'] for m in maps):
                         return {'error': f'The {cur["map"]} map in this library is damaged, and this version does not offer it to download again. '
                                          'Choose a map again.', 'code': 'unavailable'}
-                    if mp:
-                        items.insert(1, {'id': mp['id'], 'kind': 'map', 'title': mp['title'], 'state': 'waiting', 'bytes_done': 0,
-                                         'bytes_total': mp['download_bytes'], 'rate_bps': 0, 'eta_s': None, 'error': None})
-            names = [f['name'] for f in pack['files']] + ([model['file']] if model else []) + ([f['name'] for f in mp['files']] if mp else [])
+                    if len(maps) > 1:        # a combined map: every state again, put together as before
+                        mapset = {'base': 'first', 'states': states}
+                    for i, mp in enumerate(maps):
+                        items.insert(1 + i, {'id': mp['id'], 'kind': 'map', 'title': mp['title'], 'state': 'waiting', 'bytes_done': 0,
+                                             'bytes_total': mp['download_bytes'], 'rate_bps': 0, 'eta_s': None, 'error': None})
+                    if mapset:
+                        items.insert(1 + len(maps), {'id': 'combine', 'kind': 'mapset', 'title': _mapset_title(states), 'state': 'waiting', 'bytes_done': 0,
+                                                     'bytes_total': sum(m['installed_bytes'] for m in maps), 'rate_bps': 0, 'eta_s': None, 'error': None})
+            names = [f['name'] for f in pack['files']] + ([model['file']] if model else []) + [f['name'] for m in maps for f in m['files']]
             self.job = {'id': uuid.uuid4().hex[:12], 'state': 'waiting', 'items': items, 'error': None, 'started': _now(), 'folder': str(target),
                         'repair': True,
-                        'plan': {'pack': pack, 'model': model, 'map': mp, 'parent': str(parent), 'target': str(target), 'work': str(work),
+                        'plan': {'pack': pack, 'model': model, 'maps': maps, 'mapset': mapset, 'addresses': [], 'drop_addresses': [],
+                                 'parent': str(parent), 'target': str(target), 'work': str(work),
                                  'sources': {k: v for k, v in srcs.items() if k in names}, 'explicit': False, 'retried': {},
                                  'switch': True, 'repair': True}}
             s = self._settings()
@@ -694,7 +786,7 @@ class Setup:
     def _clean(self, job):
         """What the job made in its work folder goes; the person's own files and any library stay."""
         work = Path(job['plan']['work'])
-        for sub in ('downloads', 'unpack', 'unpack-map', 'unpack-addresses'):
+        for sub in ('downloads', 'unpack', 'unpack-map', 'unpack-maps', 'unpack-addresses'):
             shutil.rmtree(work / sub, ignore_errors=True)
 
     def use(self, path):
@@ -873,6 +965,8 @@ class Setup:
                     self._do_pack(it, plan, work, control)
                 elif it['kind'] == 'map':
                     self._do_map(it, plan, work, control)
+                elif it['kind'] == 'mapset':
+                    self._do_mapset(it, plan, work, control)
                 elif it['kind'] == 'addresses':
                     self._do_addresses(it, plan, work, control)
                 else:
@@ -986,7 +1080,7 @@ class Setup:
             if metadata.get('content_revision') != pack['revision']:
                 raise install.Refused('unpack', 'The library content version does not match this download.')
         current = self.current_info() or {}
-        if (not plan.get('map') and Path(plan['target']) == self.current and current.get('pack') == pack['id']
+        if (not plan.get('maps') and not plan.get('mapset') and Path(plan['target']) == self.current and current.get('pack') == pack['id']
                 and _separate_map(self.current)):          # kept only when Repair found it whole, or it would have its own item
             install.copy_map(self.current, lib)
         install._write_json(lib / 'setup-pack.json', {'pack': pack['id'], 'installed': _now(), 'files': [f['name'] for f in pack['files']]})
@@ -995,9 +1089,10 @@ class Setup:
                 os.unlink(path)
 
     def _do_map(self, it, plan, work, control):
-        """A state map: download, check, unpack (map files only) into unpack-map/. With a pack, it replaces the staged library's own
-        map set at once; on its own it is staged and switched in when the app restarts (install._apply_map)."""
-        mp = plan['map']
+        """A state map: download, check, unpack (map files only). On its own (no mapset) it is the new map: with a pack, it
+        replaces the staged library's own map set at once; else it is staged and switched in when the app restarts
+        (install._apply_map). With a mapset it waits in unpack-maps/<state>/ for _do_mapset to put the states together."""
+        mp = _entry_for(plan, it)
         got, offset = [], 0
         for f in mp['files']:
             path, ours = self._get_file(it, f, plan, work, control, offset)
@@ -1005,14 +1100,16 @@ class Setup:
             offset += f['size']
         tracker = _Item(it)
         self._set(it, 'unpacking', bytes_done=0, bytes_total=mp['installed_bytes'])
-        staged = work / 'unpack-map'
+        staged = _map_unpack_dir(plan, mp)
         for path, _ in got:
             install.check_zip(path, mp['installed_bytes'], install.map_member)
         for path, _ in got:
             lib = install.unpack(path, staged, mp['installed_bytes'], control, lambda d, t: tracker.progress(d, t, 'unpacking'), allowed=install.map_member)
         if install.map_name(lib) != mp['id']:
             raise install.Refused('unpack', f'The map file says it is {install.map_name(lib)}, not {mp["id"]}.')
-        if plan['switch']:
+        if plan.get('mapset'):
+            pass
+        elif plan['switch']:
             install.replace_map_in(work / 'unpack' / DATA_NAME, lib)
             shutil.rmtree(staged, ignore_errors=True)
         else:
@@ -1021,8 +1118,60 @@ class Setup:
             if ours:
                 os.unlink(path)
 
+    def _do_mapset(self, it, plan, work, control):
+        """Puts the states together (engine/setup/mapmerge.py) into one map set: inside the staged library when a pack comes with
+        the job, else in unpack-map/, which is switched in when the app restarts like a single state map. The starting point:
+        'keep' the map there now (a copy of it, unless the staged pack's own), 'derive' the base from it, or the 'first' state.
+        Each state merged is noted in the plan, so a stop carries on with the next."""
+        ms = plan['mapset']
+        target = work / 'unpack' / DATA_NAME if plan['switch'] else work / 'unpack-map' / DATA_NAME
+        fetched = [m['id'] for m in plan['maps']]
+        done = plan.setdefault('mapset_merged', [])
+        total = it.get('bytes_total') or 1
+        tracker = _Item(it)
+        self._set(it, 'activating', bytes_done=it.get('bytes_done', 0))
+        if not plan.get('mapset_ready'):
+            if not plan['switch']:
+                shutil.rmtree(work / 'unpack-map', ignore_errors=True)
+                target.mkdir(parents=True)
+            if ms['base'] == 'first':
+                first = fetched[0]
+                source = _map_unpack_dir(plan, {'id': first}) / DATA_NAME
+                for rel in install.map_files(target):
+                    os.unlink(target / rel)
+                for rel in install.map_files(source):
+                    (target / rel).parent.mkdir(parents=True, exist_ok=True)
+                    os.replace(source / rel, target / rel)
+                done.append(first)
+            elif not plan['switch']:
+                for rel in install.map_files(self.current):
+                    control.check()
+                    (target / rel).parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(self.current / rel, target / rel)
+            if ms['base'] == 'derive':
+                mapmerge.derive_base(target)
+            plan['mapset_ready'] = True
+            self._save_job()
+        merged = sum(m['installed_bytes'] for m in plan['maps'] if m['id'] in done)
+        tracker.progress(min(merged, total), total, 'activating')
+        for mp in plan['maps']:
+            if mp['id'] in done:
+                continue
+            control.check()
+            source = _map_unpack_dir(plan, mp) / DATA_NAME
+            mapmerge.merge_into(target, source)
+            done.append(mp['id'])
+            self._save_job()
+            shutil.rmtree(_map_unpack_dir(plan, mp), ignore_errors=True)
+            merged += mp['installed_bytes']
+            tracker.progress(min(merged, total), total, 'activating')
+        mapmerge.finish(target, ms['states'])
+        shutil.rmtree(work / 'unpack-maps', ignore_errors=True)
+        if not plan['switch']:
+            plan['map_new'] = str(target)
+
     def _do_addresses(self, it, plan, work, control):
-        entry = plan['addresses']
+        entry = _entry_for(plan, it)
         relative = 'derived/geo/addresses/' + entry['id'] + '.sqlite'
         directories = {'', 'derived', 'derived/geo', 'derived/geo/addresses'}
 
@@ -1092,9 +1241,12 @@ class Setup:
                 lib = work / 'unpack' / DATA_NAME
                 if not install.is_library(lib):
                     raise install.Refused('activate', 'The new library is not complete.')
-                install.stage_switch(_pending_file(self.settings_dir), lib, plan['target'], plan.get('model_file'), model_sha256=plan.get('model_sha256'))
+                install.stage_switch(_pending_file(self.settings_dir), lib, plan['target'], plan.get('model_file'), model_sha256=plan.get('model_sha256'),
+                                     drop_addresses=plan.get('drop_addresses'))
             elif plan.get('map_new'):
-                install.stage_switch(_pending_file(self.settings_dir), plan['map_new'], plan['target'], kind='map')
+                install.stage_switch(_pending_file(self.settings_dir), plan['map_new'], plan['target'], kind='map', drop_addresses=plan.get('drop_addresses'))
+            elif plan.get('drop_addresses'):
+                install.drop_address_indexes(plan['target'], plan['drop_addresses'])
             self.job['state'] = 'done'
             for it in self.job['items']:
                 it['rate_bps'], it['eta_s'] = 0, None
@@ -1115,12 +1267,11 @@ def _tag_sources(job):
     """Each item's source: 'found' when all its files are already on this computer (plan.sources), else 'download'."""
     plan = job['plan']
     for it in job['items']:
+        entry = _entry_for(plan, it)
         if it['kind'] == 'pack' and plan.get('pack'):
             names = [f['name'] for f in plan['pack']['files']]
-        elif it['kind'] == 'map' and plan.get('map'):
-            names = [f['name'] for f in plan['map']['files']]
-        elif it['kind'] == 'addresses' and plan.get('addresses'):
-            names = [f['name'] for f in plan['addresses']['files']]
+        elif it['kind'] in ('map', 'addresses') and entry:
+            names = [f['name'] for f in entry['files']]
         elif it['kind'] == 'model' and plan.get('model'):
             names = [plan['model']['file']]
         else:
@@ -1133,6 +1284,59 @@ def _map_need(mp, have):
     if not mp:
         return 0
     return sum(f['size'] for f in mp['files'] if f['name'] not in have) + (mp.get('installed_bytes') or 0)
+
+
+PACK_MAPS = {'medium': 'CA', 'all': 'us'}    # the map set each pack carries, where the manifest's entry does not say (web/setup.js has the same)
+
+
+def _entries(plan, key, legacy, lookup):
+    """The manifest's entries for a saved plan's list under `key` (or its older single entry under `legacy`), by id. [] for
+    none, None when one is no longer offered: the job is then not used."""
+    raw = plan.get(key)
+    if raw is None and legacy:
+        raw = [plan[legacy]] if plan.get(legacy) else []
+    if isinstance(raw, dict):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return None
+    out = []
+    for r in raw:
+        entry = lookup(r.get('id')) if isinstance(r, dict) else None
+        if not entry or entry['id'] in {e['id'] for e in out}:
+            return None
+        out.append(entry)
+    return out
+
+
+def _checked_mapset(ms, maps):
+    """A saved mapset as start() writes it, or None."""
+    if not isinstance(ms, dict) or ms.get('base') not in ('keep', 'derive', 'first'):
+        return None
+    states = ms.get('states')
+    if not isinstance(states, list) or not all(isinstance(x, str) and re.fullmatch(r'[A-Z]{2}', x) for x in states):
+        return None
+    if ms['base'] == 'first' and not maps:
+        return None
+    return {'base': ms['base'], 'states': sorted(set(states))}
+
+
+def _entry_for(plan, it):
+    """The manifest entry of a map or address item, from the plan's lists."""
+    key = {'map': 'maps', 'addresses': 'addresses'}.get(it.get('kind'))
+    return next((e for e in plan.get(key) or [] if e['id'] == it.get('id')), None) if key else None
+
+
+def _map_unpack_dir(plan, mp):
+    """Where a state map unpacks: unpack-map/ when it is the new map on its own (install._pending_ok expects it there),
+    unpack-maps/<state>/ while it waits to be put together with others."""
+    work = Path(plan['work'])
+    return work / 'unpack-maps' / mp['id'] if plan.get('mapset') else work / 'unpack-map'
+
+
+def _mapset_title(states):
+    if not states:
+        return 'Base map'
+    return 'Map of ' + (', '.join(states[:-1]) + ' and ' + states[-1] if len(states) > 1 else states[0])
 
 
 def _margin(total):
@@ -1300,7 +1504,8 @@ def _default():
 ROUTES = {
     ('GET', 'state'): lambda s, b: s.state(),
     ('GET', 'job'): lambda s, b: s.public_job(),
-    ('POST', 'start'): lambda s, b: s.start(b.get('pack'), bool(b.get('ai')), b.get('folder'), repair=bool(b.get('repair')), map_id=b.get('map') or None, address_id=b.get('address_id') or None),
+    ('POST', 'start'): lambda s, b: s.start(b.get('pack'), bool(b.get('ai')), b.get('folder'), repair=bool(b.get('repair')), map_id=b.get('map') or None,
+                                            address_id=b.get('address_id') or None, map_ids=b.get('maps') if 'maps' in b else None),
     ('POST', 'pause'): lambda s, b: s.pause(),
     ('POST', 'resume'): lambda s, b: s.resume(),
     ('POST', 'cancel'): lambda s, b: s.cancel(),
