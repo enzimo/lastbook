@@ -8,7 +8,7 @@ if [ -z "$mods" ]; then
   echo "No 'python3 -B -m unittest ...' line found in CONTRIBUTING.md" >&2
   exit 1
 fi
-for m in app.tests.test_web_service app.tests.test_encyclopedias app.tests.test_wiki_routes; do
+for m in app.tests.test_web_service app.tests.test_map_checklist app.tests.test_custom_library app.tests.test_encyclopedias app.tests.test_wiki_routes; do
   if [ -f "${m//.//}.py" ]; then
     case " $mods " in *" $m "*) ;; *) mods="$mods $m" ;; esac
   fi

@@ -2,7 +2,9 @@
 
 > **This is enzimo's fork of [Immortal-Protocols/lastbook](https://github.com/Immortal-Protocols/lastbook).** It adds a web
 > service: `server.py` behind a reverse proxy with allowed host names, browser setup for whoever holds the access key, and an
-> OpenAI-compatible AI host elsewhere. See [docs/WEB-SERVICE.md](docs/WEB-SERVICE.md). The image is published as
+> OpenAI-compatible AI host elsewhere. See [docs/WEB-SERVICE.md](docs/WEB-SERVICE.md). Setup also takes several state maps
+> at once (a checklist), and a Custom library chosen by topic or item from the All pack, downloaded file by file
+> ([docs/SETUP-API.md](docs/SETUP-API.md), last section). The image is published as
 > `ghcr.io/enzimo/lastbook` (`latest`, or `sha-<commit>` to pin). Everything else follows upstream: a daily workflow
 > (`.github/workflows/sync-upstream.yml`) merges it, tests it and publishes a new image, and opens an issue when it needs a
 > hand. Report problems with the desktop apps upstream.

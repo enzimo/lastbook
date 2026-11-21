@@ -72,18 +72,22 @@
   /* ------------------------------------------------------------ state */
   let S = null;           // GET state
   let view = 'choose';
-  let choice = { pack: null, ai: false, map: null };   // map: the selected state code
+  let choice = { pack: null, ai: false, states: null };   // states: the ticked states (a Set), null until the person changes it
   let folder = '';
   let shortfall = null;   // the answer to a start that had no room: {need_bytes, free_bytes}
   let pollT = 0;
   let confirmCancel = false, confirmRemove = false, confirmOld = false;
   let note = '', noteOk = false;
   let repair = null;      // a repair under way: {fixed} turns true once it had to download something; {sure}: this page saw it from the start
+  /* a Custom library (engine/setup/custom.py): C is GET custom; pick the groups ticked and single records added or taken out */
+  let C = null, pick = null, cPoll = 0;
+  const open = new Set(), itemsOf = {}, foldOpen = new Set();   // groups shown open, their records once fetched, sections unfolded
 
   const packs = () => (S.manifest && S.manifest.packs) || [];
   const model = () => ((S.manifest && S.manifest.models) || [])[0] || null;
   const cur = () => S.current || null;
   const packById = id => packs().find(p => p.id === id);
+  const isCustom = () => choice.pack === 'custom';
   function packNeedsInstall(pack) {
     if (!pack) return false;
     const current = cur();
@@ -98,19 +102,46 @@
   /* the detailed map the library will have once the chosen pack is in: the person's state map, or the one the pack carries */
   const PACK_MAP = { medium: 'CA', all: 'us' };   // what the packs carry today; a manifest packs[].map, when there, wins
   const packMap = id => { const p = packById(id) || {}; return 'map' in p ? p.map || null : PACK_MAP[id] || null };
-  const mapNow = () => { const c = cur() || {}; return choice.pack && choice.pack !== c.pack ? packMap(choice.pack) : (c.map && c.map !== 'base' ? c.map : packMap(c.pack)) };
-  const selectedState = () => choice.map || (mapNow() !== 'us' && mapNow()) || ((cur() || {}).address_indexes || [])[0] || '';
   const addresses = () => (S.manifest && S.manifest.address_indexes) || [];
   const addressById = id => addresses().find(a => a.id === id);
-  const addressAdds = () => { const a = addressById(selectedState()); return a && a.available !== false && !((cur() || {}).address_indexes || []).includes(a.id) ? a : null };
-  const mapMissing = () => !selectedState();
-  const mapAdds = () => choice.map && choice.map !== mapNow() && mapNow() !== 'us' ? mapById(choice.map) : null;
+  const willInstall = () => !isCustom() && packNeedsInstall(packById(choice.pack));
+  /* the states the map holds before this choice: the chosen pack's own when a pack is installed, else the open library's ('us': every state) */
+  function startStates() {
+    const c = cur() || {};
+    if (isCustom() && !cur()) return [];   // a new Custom library has no map of its own: it is built from the states ticked
+    if (!cur() || willInstall()) { const m = packMap(choice.pack); return m === 'us' ? 'us' : m && m !== 'base' ? [m] : [] }
+    if (c.map === 'us') return 'us';
+    return c.maps || (/^[A-Z]{2}$/.test(c.map || '') ? [c.map] : []);
+  }
+  const haveAddr = () => cur() ? cur().address_indexes || [] : [];
+  const ticked = () => choice.states || new Set([...(startStates() === 'us' ? [] : startStates()), ...haveAddr()]);
+  const sameSet = (a, b) => a.length === b.length && a.every(x => b.includes(x));
+  /* what the checklist asks for, by the engine's own rule (engine/setup/api.py, _plan_maps): only additions are added to the map
+     there now; anything else builds the map again from the ticked states, which then all download; none ticked leaves the base */
+  function mapPlan() {
+    const start = startStates(), want = [...ticked()].sort();
+    let fetch = [], base = null;
+    if (start !== 'us' && !sameSet(want, start)) {
+      if (start.length && start.every(x => want.includes(x)) ) { base = 'keep'; fetch = want.filter(x => !start.includes(x)) }
+      else if (!want.length) base = 'derive';
+      else { base = 'first'; fetch = want }
+    }
+    const combine = base !== null && !(base === 'first' && fetch.length === 1);
+    const have = haveAddr();
+    const addAddr = want.filter(x => !have.includes(x) && addressById(x) && addressById(x).available !== false).map(addressById);
+    const dropAddr = cur() ? have.filter(x => !want.includes(x)) : [];
+    const copy = combine && base !== 'first' && !willInstall() ? (cur() || {}).map_bytes || 0 : 0;
+    return { start, want, base, combine, fetch: fetch.map(mapById).filter(Boolean), addAddr, dropAddr, copy,
+             adds: start === 'us' ? [] : want.filter(x => !start.includes(x)), removes: start === 'us' ? [] : start.filter(x => !want.includes(x)) };
+  }
+  const listNames = ids => ids.map(mapName).join(', ').replace(/, ([^,]*)$/, ' and $1');
+  const mapMissing = () => (!cur() || isCustom()) && !ticked().size && !(isCustom() && cur() && (startStates() === 'us' || startStates().length));
   function packSummary(p) {
     const text = p.summary || '';
     if (p.id !== 'medium' || !maps().length) return text;
     // The manifest describes the archive's bundled map. Setup replaces it with the chosen state map.
-    const state = selectedState();
-    return text.replace(/\ba detailed map of California\b/, () => 'a detailed map of ' + (state ? mapName(state) : 'your state'));
+    const want = [...ticked()];
+    return text.replace(/\ba detailed map of California\b/, () => want.length ? 'detailed maps of ' + listNames(want.sort()) : 'the base map only');
   }
   const packDl = p => p.download_bytes || (p.files || []).reduce((n, f) => n + (f.size || 0), 0);
   const SEP = WIN ? '\\' : '/', DATA = 'LastbookData';
@@ -140,12 +171,13 @@
       need += (got ? 0 : packDl(p)) + (p.installed_bytes || 0);
       if (p.id === c.pack) need += c.map_bytes || 0;
     }
+    if (isCustom()) { const e = customEstimate(); dl += e; need += e + (C && C.state === 'ready' ? 4 * 128 * 1024 ** 2 : 0) }
     const m = model();
     if (choice.ai && m && !c.model && aiFits()) { const got = foundFor('model'); if (!got) { dl += m.size || 0; need += m.size || 0 } else need += m.size || 0 }
-    const mp = mapAdds();
-    if (mp) { const got = foundFor('map', mp.id); if (!got) dl += packDl(mp); need += (got ? 0 : packDl(mp)) + (mp.installed_bytes || 0) }
-    const a = addressAdds();
-    if (a) { dl += packDl(a); need += packDl(a) + (a.installed_bytes || 0) }
+    const mp = mapPlan();
+    for (const x of mp.fetch) { const got = foundFor('map', x.id); if (!got) dl += packDl(x); need += (got ? 0 : packDl(x)) + (x.installed_bytes || 0) }
+    for (const a of mp.addAddr) { dl += packDl(a); need += packDl(a) + (a.installed_bytes || 0) }
+    need += mp.copy;
     if (need) need += 2 * 1000 ** 3;
     return { dl, need };
   }
@@ -237,7 +269,8 @@
       ${found ? `<h2>Found on this computer</h2><div class="s-founds">${found}</div>` : ''}
       <section id="mapBox" class="s-map-panel" aria-label="Your local map"></section>
       <h2 id="packH">Library</h2>
-      <div class="s-opts" role="radiogroup" aria-labelledby="packH">${packCards}</div>
+      <div class="s-opts" role="radiogroup" aria-labelledby="packH">${packCards}${customCard()}</div>
+      <section id="customBox" class="s-custom" aria-label="What the Custom library includes" hidden></section>
       ${ai ? `<h2>Local AI</h2>${ai}` : ''}
       <section class="s-sum" id="sum" aria-live="polite"></section>
       <div class="s-go">
@@ -246,7 +279,7 @@
         ${CAN.pick ? '<button class="s-link" id="haveFile">Choose a library zip or AI model file</button>' : ''}
       </div>
       <p class="s-note" id="haveNote" hidden></p>`;
-    main.querySelectorAll('input[name=pack]').forEach(r => r.onchange = () => { choice.pack = r.value; shortfall = null; mapSection(); summary() });
+    main.querySelectorAll('input[name=pack]').forEach(r => r.onchange = () => { choice.pack = r.value; shortfall = null; mapSection(); customSection(); summary() });
     const box = $('#aiBox'); if (box && !box.disabled) box.onchange = () => { choice.ai = box.checked; shortfall = null; summary() };
     main.querySelectorAll('[data-use]').forEach(b => b.onclick = () => useFile((S.found || [])[+b.dataset.use].path, b));
     $('#start').onclick = start;
@@ -254,36 +287,172 @@
     if ($('#haveLib')) $('#haveLib').onclick = () => haveLibrary(false);
     if ($('#haveFile')) $('#haveFile').onclick = () => haveLibrary(true);
     mapSection();
+    customSection();
     summary();
   }
-  /* Map geometry and address indexes are separate downloads, chosen by state. */
+  /* ---- a Custom library: chosen group by group, record by record, from the All library */
+  function customCard() {
+    const all = packById('all');
+    if (!all || all.available === false) return '';
+    const here = cur() && cur().pack === 'custom';
+    return `<label class="s-opt"><input type="radio" name="pack" value="custom"${isCustom() ? ' checked' : ''}>
+      <span class="s-opt-in"><span class="s-opt-h"><b>Custom</b>${here ? '<span class="s-badge here">Installed</span>' : '<span class="s-badge">Choose</span>'}</span>
+      <small>Pick the encyclopedias, videos and documents you want from the All library. Only those download.</small>
+      <span class="s-sizes"><span>${here ? 'Change what it includes' : 'You choose the size'}</span></span></span></label>`;
+  }
+  const groupOn = g => pick && pick.groups.has(g.id);
+  function itemOn(g, it) { return pick.remove.has(it.id) ? false : pick.add.has(it.id) || groupOn(g) }
+  function customEstimate() {
+    if (!C || C.state !== 'ready' || !pick) return 0;
+    let n = C.core_bytes || 0;
+    for (const g of C.groups) {
+      const its = itemsOf[g.id];
+      if (its) n += its.reduce((t, it) => t + (itemOn(g, it) ? it.bytes : 0), 0);
+      else if (groupOn(g)) n += g.bytes;
+    }
+    return n;
+  }
+  function startPick() {
+    const sel = C.selection;
+    pick = sel ? { groups: new Set(sel.groups), add: new Set(sel.add), remove: new Set(sel.remove) }
+      : { groups: new Set(C.groups.filter(g => g.default).map(g => g.id)), add: new Set(), remove: new Set() };
+  }
+  async function customLoad() {
+    clearTimeout(cPoll);
+    try { C = await call('custom') } catch (e) { C = { state: 'failed', error: e.message } }
+    if (C.state === 'ready' && !pick) startPick();
+    if (isCustom()) { customSection(); summary() }
+    if (C.state === 'loading') cPoll = setTimeout(customLoad, 1000);
+  }
+  function customSection() {
+    const box = $('#customBox');
+    if (!box) return;
+    box.hidden = !isCustom();
+    if (!isCustom()) return;
+    if (!C) { box.innerHTML = '<p class="s-hint">Looking for the All library’s list…</p>'; customLoad(); return }
+    if (C.state !== 'ready') {
+      const busy = C.state === 'loading', pct = busy && C.total ? Math.min(100, C.done / C.total * 100) : 0;
+      box.innerHTML = `<h2>What it includes</h2>
+        <p class="s-mapnote">Lastbook first reads the All library’s list of what it holds: about 30 MB from the download server.</p>
+        ${C.state === 'failed' ? `<p class="s-short">${ico('warn')}<span>${esc(C.error || 'The list could not be read.')}</span></p>` : ''}
+        ${busy ? `<div class="s-bar" role="progressbar" aria-label="Reading the list" aria-valuenow="${Math.round(pct)}" aria-valuemin="0" aria-valuemax="100"><i style="width:${pct}%"></i></div><p class="s-hint">Reading the list… ${size(C.done || 0)}</p>`
+          : `<p><button class="btn" id="cLoad">${ico('down')}Read the list</button></p>`}`;
+      if ($('#cLoad')) $('#cLoad').onclick = async () => { $('#cLoad').disabled = true; try { C = await call('custom-load', {}) } catch (e) { C = { state: 'failed', error: e.message } } customSection(); if (C.state === 'loading') cPoll = setTimeout(customLoad, 1000); else customLoad() };
+      return;
+    }
+    if (!pick) startPick();
+    const sect = (kind, title, note, fold) => {
+      const gs = C.groups.filter(g => g.kind === kind);
+      if (!gs.length) return '';
+      const on = gs.filter(groupOn), body = `${note ? `<p class="s-hint">${note}</p>` : ''}${fold ? `<p class="s-acts"><button class="btn plain" data-all="${kind}">All</button><button class="btn plain" data-none="${kind}">None</button></p>` : ''}<div class="s-groups${fold ? ' two' : ''}">${gs.map(groupRow).join('')}</div>`;
+      return fold ? `<details class="s-fold" data-kind="${kind}"${foldOpen.has(kind) ? ' open' : ''}><summary><h3>${title}</h3><small data-sum="${kind}">${on.length} of ${gs.length} topics · ${size(on.reduce((n, g) => n + g.bytes, 0))}</small></summary>${body}</details>`
+        : `<h3>${title}</h3>${body}`;
+    };
+    box.innerHTML = `<h2>What it includes</h2>
+      <p class="s-mapnote">Tick what you want. Every Custom library also has the course and page images, the reader’s style and the search index (${size(C.core_bytes)}), and its map comes from the states you tick above.</p>
+      ${sect('guides', 'Guides', 'The pages and videos the built-in guides point to. Keep these so every guide works.')}
+      ${sect('zim', 'Encyclopedias')}
+      ${sect('video', 'Videos', 'By topic. Pick opens a topic to choose single videos. A video brings its transcript, captions and picture.', true)}
+      ${sect('doc', 'Documents and manuals', 'By topic. Pick opens a topic to choose single documents.', true)}
+      <p class="s-hint" id="cTotal"></p>`;
+    box.querySelectorAll('[data-g]').forEach(i => i.onchange = () => { const id = i.dataset.g; if (i.checked) pick.groups.add(id); else pick.groups.delete(id); for (const it of itemsOf[id] || []) { pick.add.delete(it.id); pick.remove.delete(it.id) } refreshGroup(id); customTotal() });
+    box.querySelectorAll('[data-open]').forEach(b => b.onclick = () => toggleOpen(b.dataset.open));
+    box.querySelectorAll('details.s-fold').forEach(d => d.ontoggle = () => { if (d.open) foldOpen.add(d.dataset.kind); else foldOpen.delete(d.dataset.kind) });
+    box.querySelectorAll('[data-all],[data-none]').forEach(b => b.onclick = () => {
+      const kind = b.dataset.all || b.dataset.none;
+      for (const g of C.groups.filter(x => x.kind === kind)) { if (b.dataset.all) pick.groups.add(g.id); else pick.groups.delete(g.id); for (const it of itemsOf[g.id] || []) { pick.add.delete(it.id); pick.remove.delete(it.id) } refreshGroup(g.id) }
+      customTotal();
+    });
+    for (const id of open) fillItems(id);
+    customTotal();
+  }
+  function groupRow(g) {
+    const isOpen = open.has(g.id), can = g.kind === 'video' || g.kind === 'doc' || g.kind === 'guides';
+    return `<div class="s-group" data-group="${esc(g.id)}"><label class="s-check"><input type="checkbox" data-g="${esc(g.id)}"${groupOn(g) ? ' checked' : ''}><span>${esc(g.title)}</span><small>${g.count > 1 || g.kind !== 'zim' ? g.count + ' · ' : ''}${size(g.bytes)}</small></label>
+      ${can ? `<button class="s-link s-more" data-open="${esc(g.id)}" aria-expanded="${isOpen}">${isOpen ? 'Close' : 'Pick'}</button>` : ''}
+      <div class="s-items-list" id="it-${esc(g.id)}"${isOpen ? '' : ' hidden'}></div></div>`;
+  }
+  async function toggleOpen(id) {
+    if (open.has(id)) open.delete(id); else open.add(id);
+    const row = main.querySelector(`.s-group[data-group="${CSS.escape(id)}"]`), b = row.querySelector('[data-open]'), list = row.querySelector('.s-items-list');
+    b.textContent = open.has(id) ? 'Close' : 'Pick'; b.setAttribute('aria-expanded', open.has(id)); list.hidden = !open.has(id);
+    if (open.has(id)) fillItems(id);
+  }
+  async function fillItems(id) {
+    const list = $('#it-' + CSS.escape(id)); if (!list) return;
+    if (!itemsOf[id]) {
+      list.innerHTML = '<p class="s-hint">Loading…</p>';
+      try { const r = await call('custom-items', { group: id }); itemsOf[id] = r.items || [] } catch (e) { list.innerHTML = `<p class="s-hint">${esc(e.message)}</p>`; return }
+    }
+    const g = C.groups.find(x => x.id === id);
+    list.innerHTML = itemsOf[id].map(it => `<label class="s-check s-item-pick"><input type="checkbox" data-item="${esc(it.id)}"${itemOn(g, it) ? ' checked' : ''}><span>${esc(it.title)}</span><small>${it.duration ? esc(String(it.duration)) + ' · ' : ''}${size(it.bytes)}</small></label>`).join('');
+    list.querySelectorAll('[data-item]').forEach(i => i.onchange = () => {
+      const rid = i.dataset.item;
+      if (groupOn(g)) { if (i.checked) pick.remove.delete(rid); else pick.remove.add(rid) }
+      else { if (i.checked) pick.add.add(rid); else pick.add.delete(rid) }
+      refreshGroup(id); customTotal();
+    });
+    refreshGroup(id); customTotal();
+  }
+  function refreshGroup(id) {
+    const g = C.groups.find(x => x.id === id), box = main.querySelector(`[data-g="${CSS.escape(id)}"]`); if (!g || !box) return;
+    const its = itemsOf[id];
+    const some = its ? its.filter(it => itemOn(g, it)).length : null;
+    box.checked = groupOn(g); box.indeterminate = its ? (groupOn(g) ? some < its.length : some > 0) : false;
+    main.querySelectorAll(`#it-${CSS.escape(id)} [data-item]`).forEach(i => { const it = its.find(x => x.id === i.dataset.item); if (it) i.checked = itemOn(g, it) });
+  }
+  function customTotal() {
+    for (const kind of ['video', 'doc']) {
+      const el = main.querySelector(`[data-sum="${kind}"]`), gs = C.groups.filter(g => g.kind === kind), on = gs.filter(groupOn);
+      if (el) el.textContent = `${on.length} of ${gs.length} topics · ${size(on.reduce((n, g) => n + g.bytes, 0))}`;
+    }
+    const t = $('#cTotal'); if (t) t.textContent = `About ${size(customEstimate())} with what is ticked. Something in two ticked groups (a guide’s video and its topic) downloads once.`;
+    summary();
+  }
+  /* Map geometry and address indexes are separate downloads, chosen by state: a checklist, so a library can hold several */
   function mapSection() {
-    const box = $('#mapBox'), now = mapNow();
+    const box = $('#mapBox');
     if (!box) return;
     main.querySelectorAll('[data-pack-summary]').forEach(el => { el.textContent = packSummary(packById(el.dataset.packSummary)) });
-    const selected = selectedState();
-    const opts = maps().map(m => {
-      const a = addressById(m.id), included = now === 'us' || m.id === now;
-      const addressIncluded = ((cur() || {}).address_indexes || []).includes(m.id);
-      const off = !included && m.available === false;
-      const bytes = (included ? 0 : packDl(m)) + (a && a.available !== false && !addressIncluded ? packDl(a) : 0);
-      const details = off ? 'coming later' : bytes ? size(bytes) + ' download' : 'included';
-      return `<option value="${esc(m.id)}"${selected === m.id ? ' selected' : ''}${off ? ' disabled' : ''}>${esc(m.title)} — ${details}</option>`;
+    const start = startStates(), on = ticked(), have = haveAddr();
+    const rows = maps().map(m => {
+      const a = addressById(m.id), here = start === 'us' || start.includes(m.id);
+      const aOk = a && a.available !== false;
+      const off = !here && m.available === false && !aOk;
+      const bytes = (here || start === 'us' ? 0 : packDl(m)) + (aOk && !have.includes(m.id) ? packDl(a) : 0);
+      const what = off ? 'coming later' : here && (have.includes(m.id) || !aOk) ? 'on this computer' : bytes ? size(bytes) : 'included';
+      return `<label class="s-check${off ? ' off' : ''}" data-name="${esc(String(m.title).toLowerCase())}"><input type="checkbox" value="${esc(m.id)}"${on.has(m.id) ? ' checked' : ''}${off ? ' disabled' : ''}><span>${esc(m.title)}</span><small>${what}</small></label>`;
     }).join('');
-    const sel = mapById(selected), a = addressAdds();
-    const mapIncluded = now === 'us' || selected === now;
-    const bytes = (sel && !mapIncluded ? packDl(sel) : 0) + (a ? packDl(a) : 0);
-    const disk = (sel && !mapIncluded ? sel.installed_bytes || 0 : 0) + (a ? a.installed_bytes || 0 : 0);
-    const unavailable = selected && addresses().length && (!addressById(selected) || addressById(selected).available === false);
-    let hint = !sel ? 'Select your state to continue.' : bytes ? `${size(bytes)} download · ${size(disk)} on disk${mapIncluded && a ? '. Your map is already included; only the address index downloads.' : ''}` : 'Your state map and available address index are already included.';
-    if (unavailable) hint = (bytes ? `${size(bytes)} download · ${size(disk)} on disk.` : 'Your state map is already included.') + ' Street-address search is not available for this state yet.';
-    box.innerHTML = `<h2>${ico('map')}Your local map</h2>
-      <p class="s-mapnote">Local streets, buildings, water and places to get help. Available offline.</p>
-      ${now === 'us' ? '<p class="s-mapnote">All includes every state map. Choose your state for offline street-address search.</p>' : ''}
-      <label class="s-maplabel" for="mapSel">Choose your state</label>
-      <select id="mapSel" class="s-select" required aria-describedby="mapHint"><option value="" disabled${selected ? '' : ' selected'}>Select a state</option>${opts}</select>
-      <p class="s-hint" id="mapHint">${hint}</p>`;
-    $('#mapSel').onchange = e => { choice.map = e.target.value; shortfall = null; mapSection(); summary(); $('#mapSel').focus() };
+    box.innerHTML = `<h2>${ico('map')}Your local maps</h2>
+      <p class="s-mapnote">Local streets, buildings, water and places to get help, with street-address search. Tick every state you want. Available offline.</p>
+      ${start === 'us' ? '<p class="s-mapnote">All includes every state map. Tick the states you want street-address search for.</p>' : ''}
+      <div class="s-checkbar"><input type="search" id="mapFind" class="s-select s-find" placeholder="Find a state" aria-label="Find a state" autocomplete="off">
+        <span class="s-count" id="mapCount"></span></div>
+      <div class="s-checks" role="group" aria-label="States" aria-describedby="mapHint">${rows}</div>
+      <p class="s-hint" id="mapHint"></p>`;
+    box.querySelectorAll('.s-checks input').forEach(i => i.onchange = () => {
+      const next = new Set(ticked()); if (i.checked) next.add(i.value); else next.delete(i.value);
+      choice.states = next; shortfall = null; mapHint(); summary();
+      main.querySelectorAll('[data-pack-summary]').forEach(el => { el.textContent = packSummary(packById(el.dataset.packSummary)) });
+    });
+    $('#mapFind').oninput = e => { const q = e.target.value.trim().toLowerCase(); box.querySelectorAll('.s-check').forEach(l => { l.hidden = !!q && !l.dataset.name.includes(q) }) };
+    mapHint();
+  }
+  function mapHint() {
+    const h = $('#mapHint'); if (!h) return;
+    const mp = mapPlan(), parts = [];
+    $('#mapCount').textContent = mp.want.length ? `${mp.want.length} ticked` : '';
+    if (mapMissing()) { h.textContent = 'Tick at least one state to continue.'; return }
+    if (mp.adds.length) parts.push('Adds ' + listNames(mp.adds) + '.');
+    if (mp.removes.length) parts.push('Removes ' + listNames(mp.removes) + '.');
+    if (mp.base === 'first' && mp.removes.length && mp.want.length > 1) parts.push('A combined map can’t be taken apart, so the states you keep download again.');
+    if (mp.base === 'derive') parts.push('Only the base map stays: roads, water and places everywhere, without local detail.');
+    if (mp.addAddr.length && !mp.adds.length && mp.start !== 'us') parts.push('Street-address search is added for ' + listNames(mp.addAddr.map(a => a.id)) + '.');
+    if (mp.start === 'us' && mp.addAddr.length) parts.push('Street-address search for ' + listNames(mp.addAddr.map(a => a.id)) + '.');
+    if (mp.dropAddr.length && mp.start === 'us') parts.push('Street-address search goes for ' + listNames(mp.dropAddr) + '.');
+    const dl = mp.fetch.reduce((n, x) => n + packDl(x), 0) + mp.addAddr.reduce((n, a) => n + packDl(a), 0);
+    if (dl) parts.push(`${size(dl)} to download.`);
+    h.textContent = parts.join(' ') || (mp.want.length ? 'These maps are what you have now.' : 'No state map: the base map only.');
   }
   function summary() {
     const { dl, need } = plan(), d = diskFor(folder), free = d ? d.free_bytes : null;
@@ -297,10 +466,11 @@
       ${folderRow()}`
       : `<p class="s-nothing">${c ? 'This is what you have now.' : 'Pick a library.'}</p>${c ? '' : folderRow()}`;
     const b = $('#start');
-    b.disabled = !need || !!short || mapMissing();
-    const newPack = c && packNeedsInstall(packById(choice.pack)), newAi = c && choice.ai && !c.model, newMap = c && mapAdds(), newAddresses = c && addressAdds();
-    const parts = [newPack && packById(choice.pack).title, newAi && 'the local AI', newMap && `the ${newMap.title} map`, newAddresses && !newMap && 'offline address search'].filter(Boolean);
-    b.textContent = mapMissing() ? 'Choose your state to continue' : !c ? 'Download and install' : parts.length ? 'Get ' + parts.join(parts.length > 2 ? ', ' : ' and ').replace(/, ([^,]*)$/, ' and $1') : 'Nothing to add';
+    const mp = mapPlan(), onlyDrop = c && !need && mp.dropAddr.length > 0;
+    b.disabled = (!need && !onlyDrop) || !!short || mapMissing() || (isCustom() && (!C || C.state !== 'ready' || !pick));
+    const newPack = c && packNeedsInstall(packById(choice.pack)), newAi = c && choice.ai && !c.model, newMap = c && mp.base !== null, newAddresses = c && mp.addAddr.length > 0;
+    const parts = [newPack && packById(choice.pack).title, newAi && 'the local AI', newMap && (mp.want.length ? 'the new map' : 'the base map'), newAddresses && !newMap && 'offline address search'].filter(Boolean);
+    b.textContent = mapMissing() ? 'Tick a state to continue' : isCustom() ? (C && C.state === 'ready' ? (c && c.pack === 'custom' ? 'Change the Custom library' : 'Download and install the Custom library') : 'Read the list first') : !c ? 'Download and install' : parts.length ? 'Get ' + parts.join(parts.length > 2 ? ', ' : ' and ').replace(/, ([^,]*)$/, ' and $1') : onlyDrop ? 'Remove address search for ' + listNames(mp.dropAddr) : 'Nothing to add';
     if (newPack && choice.pack === c.pack && !mapMissing()) b.textContent = 'Download and install update';
     const ch = $('#chFolder'); if (ch) ch.onclick = pickFolder;
   }
@@ -344,41 +514,46 @@
     }
   }
   async function start() {
-    if (mapMissing()) { $('#mapSel')?.focus(); return }
+    if (mapMissing()) { main.querySelector('.s-checks input:not(:disabled)')?.focus(); return }
     const b = $('#start'); b.disabled = true;
-    const r = await call('start', { pack: packNeedsInstall(packById(choice.pack)) ? choice.pack : null, ai: !!choice.ai && aiFits() && !(cur() || {}).model, map: mapAdds() ? choice.map : null, address_id: addressById(selectedState())?.available !== false && addressById(selectedState()) ? selectedState() : null, folder }).catch(e => ({ error: e.message }));
+    const body = { pack: !isCustom() && packNeedsInstall(packById(choice.pack)) ? choice.pack : null, ai: !!choice.ai && aiFits() && !(cur() || {}).model, maps: [...ticked()].sort(), folder };
+    if (isCustom()) body.custom = { groups: [...pick.groups], add: [...pick.add], remove: [...pick.remove] };
+    const r = await call('start', body).catch(e => ({ error: e.message }));
     if (r && r.need_bytes) { shortfall = r; summary(); return }
+    if (r && r.removed) { S = await call('state').catch(() => S); choice.states = null; note = 'Street-address search was removed for ' + listNames(r.removed) + '.'; noteOk = true; view = 'manage'; manageView(); return }
     if (!r || r.error) { b.disabled = false; const n = $('#haveNote'); n.hidden = false; n.textContent = (r && r.error) || 'Setup could not start.'; return }
     S.job = r; go('job'); poll();
   }
 
   /* ---- manage */
   function manageView() {
-    const c = cur(), p = packById(c.pack), m = model();
+    const c = cur(), p = packById(c.pack), m = model(), mine = c.pack === 'custom';
     const libraryUpdate = p && p.available !== false && packNeedsInstall(p);
     const o = [].concat(c.old || [])[0], old = o ? (typeof o === 'string' ? { path: o } : o) : null;   // the engine lists the paths it moved aside
     const larger = packs().filter(x => (x.installed_bytes || 0) > ((p && p.installed_bytes) || 0));
     const bigger = larger.filter(x => x.available !== false), later = larger.find(x => x.available === false);
     main.innerHTML = `<h1>Library and local AI</h1>
       <div class="s-have">
-        <div class="s-row">${ico('book', 's-ri')}<span><b>${esc(p ? p.title : c.pack || 'Library')} library</b><small>${libraryUpdate ? 'Updated edition available · ' : p ? size(p.installed_bytes) + ' · ' : ''}${esc(home(c.folder))}</small></span>
-          ${libraryUpdate ? `<button class="btn" id="libraryUpdate">Update ${esc(p.title)}</button>` : bigger.length ? `<button class="btn" id="upgrade">${ico('up')}Get ${esc(bigger[0].title)}</button>` : later ? `<span class="s-badge later">${esc(later.title)} comes later</span>` : '<span class="s-badge here">The largest</span>'}</div>
+        <div class="s-row">${ico('book', 's-ri')}<span><b>${esc(p ? p.title : mine ? 'Custom' : c.pack || 'Library')} library</b><small>${libraryUpdate ? 'Updated edition available · ' : p ? size(p.installed_bytes) + ' · ' : ''}${esc(home(c.folder))}</small></span>
+          ${mine ? `<button class="btn" id="customCh">Change what it includes</button>` : libraryUpdate ? `<button class="btn" id="libraryUpdate">Update ${esc(p.title)}</button>` : bigger.length ? `<button class="btn" id="upgrade">${ico('up')}Get ${esc(bigger[0].title)}</button>` : later ? `<span class="s-badge later">${esc(later.title)} comes later</span>` : '<span class="s-badge here">The largest</span>'}</div>
         ${m && m.available !== false ? `<div class="s-row">${ico('ai', 's-ri')}<span><b>Local AI</b><small>${c.model ? 'On this computer · ' + size(m.size) : aiFits() ? 'Not installed · about ' + size(m.size) : esc((S.hardware.ai && S.hardware.ai.why) || 'Not for this computer.')}</small></span>
           ${c.model ? (!CAN.removeAi ? '' : confirmRemove ? `<span class="s-confirm"><button class="btn danger" id="rmYes">Remove</button><button class="btn plain" id="rmNo">Keep</button></span>` : '<button class="btn plain" id="rmAi">Remove</button>') : aiFits() ? `<button class="btn" id="addAi">Add</button>` : ''}</div>` : ''}
-        ${maps().length ? (() => { const mNow = c.map && c.map !== 'base' ? c.map : packMap(c.pack);
-          return `<div class="s-row">${ico('map', 's-ri')}<span><b>${mNow ? 'Detailed map: ' + esc(mapName(mNow)) : 'Detailed map'}</b><small>${mNow ? (mNow === 'us' ? 'Local streets and terrain everywhere' : 'Local streets, buildings and terrain') : 'None yet. Add one for your state.'}</small></span>
-          <button class="btn plain" id="mapCh">${(c.address_indexes || []).length ? 'Choose state' : 'Add address search'}</button></div>` })() : ''}
+        ${maps().length ? (() => { const all = c.map === 'us', st = c.maps || [];
+          return `<div class="s-row">${ico('map', 's-ri')}<span><b>${all ? 'Detailed maps: every state' : st.length ? `Detailed map${st.length > 1 ? 's' : ''}: ` + esc(listNames(st)) : 'Detailed map'}</b><small>${all || st.length ? 'Local streets, buildings and terrain' + ((c.address_indexes || []).length ? ' · address search for ' + esc(listNames(c.address_indexes)) : '') : 'None yet. Add one for your state.'}</small></span>
+          <button class="btn plain" id="mapCh">Choose states</button></div>` })() : ''}
       </div>
       ${old ? `<div class="s-row s-old">${ico('folder', 's-ri')}<span><b>The old library is still here</b><small>${esc(home(old.path))}${old.bytes ? ' · ' + size(old.bytes) : ''}</small></span>${confirmOld ? `<span class="s-confirm"><span>Delete it for good?</span><button class="btn danger" id="oldYes">Delete</button><button class="btn plain" id="oldNo">Keep</button></span>` : `<button class="btn plain" id="rmOld">${ico('trash')}Delete it</button>`}</div>` : ''}
       ${computer()}
       <div class="s-have"><div class="s-row">${ico('folder', 's-ri')}<span><b>Copy for someone else</b><small>Puts this library on a drive, with a START-HERE.txt, so someone can set up Lastbook with no internet. Nothing of yours is copied.</small></span><button class="btn plain" id="copyOut">Copy to a drive…</button></div></div>
-      <div class="s-go left">${CAN.repair ? `<button class="btn plain" id="repair">${ico('repair')}Check and repair</button>` : ''}
+      <div class="s-go left">${CAN.repair && !mine ? `<button class="btn plain" id="repair">${ico('repair')}Check and repair</button>` : ''}
         <button class="s-link" id="otherLib">${ico('folder')}Open another library folder</button></div>
+      ${mine ? '<p class="s-hint">Check and repair works for Small, Medium and All. To fetch a Custom library’s files again, change what it includes.</p>' : ''}
       <p class="s-note${noteOk ? ' ok' : ''}" id="haveNote"${note ? '' : ' hidden'}>${esc(note)}</p>`;
     $('#otherLib').onclick = () => haveLibrary(false, $('#otherLib'), { library: true });   // only another LastbookData, on a USB stick or another drive (#266)
     if ($('#libraryUpdate')) $('#libraryUpdate').onclick = () => { choice.pack = c.pack; choice.ai = !!c.model; go('choose') };
+    if ($('#customCh')) $('#customCh').onclick = () => { choice.pack = 'custom'; choice.ai = !!c.model; choice.states = null; go('choose'); $('#customBox')?.scrollIntoView() };
     if ($('#upgrade')) $('#upgrade').onclick = () => { choice.pack = bigger[0].id; choice.ai = !!c.model; go('choose') };
-    if ($('#mapCh')) $('#mapCh').onclick = () => { choice.pack = c.pack; choice.ai = !!c.model; choice.map = null; go('choose'); const m = $('#mapSel'); if (m) m.focus() };
+    if ($('#mapCh')) $('#mapCh').onclick = () => { choice.pack = c.pack; choice.ai = !!c.model; choice.states = null; go('choose'); const m = $('#mapFind'); if (m) m.focus() };
     if ($('#addAi')) $('#addAi').onclick = () => { choice.pack = c.pack; choice.ai = true; go('choose') };
     if ($('#rmAi')) $('#rmAi').onclick = () => { confirmRemove = true; manageView(); $('#rmNo').focus() };
     if ($('#rmNo')) $('#rmNo').onclick = () => { confirmRemove = false; manageView(); $('#rmAi').focus() };
@@ -441,6 +616,8 @@
                   model: [['downloading', 'Download'], ['verifying', 'Check'], ['activating', 'Finish']] };
   STEPS.map = [['downloading', 'Download'], ['unpacking', 'Unpack']];   // the engine's map item: waiting, downloading, unpacking, done
   STEPS.addresses = STEPS.map;
+  STEPS.mapset = [['activating', 'Combine']];   // the states put together into one map set, after their downloads
+  STEPS.custom = [['downloading', 'Download'], ['activating', 'Finish']];   // files fetched from the All library, then its own catalog and search
   STEPS.copy = [['copying', 'Copy']];
   const WORD = { waiting: 'Waiting', downloading: 'Downloading', paused: 'Paused', verifying: 'Checking', unpacking: 'Unpacking', activating: 'Finishing', copying: 'Copying', done: 'Done', failed: 'Stopped' };
   const ACTIVE = new Set(['waiting', 'downloading', 'verifying', 'unpacking', 'activating', 'copying']);
@@ -478,16 +655,16 @@
     const at = it.state === 'done' ? steps.length : (it.state === 'waiting' || it.state === 'paused') && !it.bytes_done && (!noDownload(it) || it.state === 'waiting') ? -1 : Math.max(0, steps.findIndex(s => s[0] === st));
     const busy = it.state === 'activating' || (['verifying', 'unpacking'].includes(it.state) && !it.bytes_total);   // the check and the unpacking count their bytes
     return `<div class="s-item${it.state === 'failed' ? ' bad' : ''}${it.state === 'done' ? ' ok' : ''}" data-item="${esc(it.id)}" data-kind="${esc(it.kind)}">
-      <div class="s-item-h">${ico(it.kind === 'model' ? 'ai' : it.kind === 'map' ? 'map' : it.kind === 'copy' ? 'folder' : 'book', 's-ri')}<b>${esc(itemTitle(it))}</b><span class="s-state" data-f="word">${it.state === 'done' ? ico('ok') : ''}${Object.hasOwn(WORD, it.state) ? WORD[it.state] : ''}</span></div>
+      <div class="s-item-h">${ico(it.kind === 'model' ? 'ai' : it.kind === 'map' || it.kind === 'mapset' ? 'map' : it.kind === 'copy' ? 'folder' : 'book', 's-ri')}<b>${esc(itemTitle(it))}</b><span class="s-state" data-f="word">${it.state === 'done' ? ico('ok') : ''}${Object.hasOwn(WORD, it.state) ? WORD[it.state] : ''}</span></div>
       <div class="s-bar new${busy && j.state !== 'paused' ? ' busy' : ''}" role="progressbar" aria-label="${esc(it.title)}" aria-valuemin="0" aria-valuemax="100" data-f="bar"><i></i></div>
       <p class="s-line" data-f="line"></p>
       <ol class="s-steps" aria-label="Steps">${steps.map((s, i) => `<li class="${i < at ? 'done' : i === at && it.state !== 'failed' ? 'now' : i === at ? 'stop' : ''}">${s[1]}</li>`).join('')}</ol>
     </div>`;
   }
-  const itemTitle = it => it.kind === 'model' ? 'Local AI' : it.kind === 'map' ? `${(mapById(it.id) || it).title || it.id} map` : it.kind === 'addresses' ? it.title : it.id === 'library' || it.id === 'repair' || /library/i.test(it.title) ? it.title : it.title + ' library';
+  const itemTitle = it => it.kind === 'model' ? 'Local AI' : it.kind === 'map' ? `${(mapById(it.id) || it).title || it.id} map` : it.kind === 'addresses' || it.kind === 'mapset' ? it.title : it.id === 'library' || it.id === 'repair' || /library/i.test(it.title) ? it.title : it.title + ' library';
   /* an item that needs nothing from the internet: the person's own file, or one stopped after its download was complete.
      source and paused_from come from the engine (docs/SETUP-API.md); without them, a complete download still counts */
-  const noDownload = it => it.source === 'found' || (!!it.paused_from && it.paused_from !== 'downloading') || (it.bytes_total > 0 && it.bytes_done >= it.bytes_total);
+  const noDownload = it => it.kind === 'mapset' || it.source === 'found' || (!!it.paused_from && it.paused_from !== 'downloading') || (it.bytes_total > 0 && it.bytes_done >= it.bytes_total);
   const STOPPED = { verifying: 'Checking stopped', unpacking: 'Unpacking stopped', activating: 'Finishing stopped' };
   const above = it => { const items = (S.job && S.job.items) || [], i = items.findIndex(x => x.id === it.id && x.kind === it.kind); return items.slice(0, Math.max(i, 0)) };
   const behind = it => above(it).some(x => x.state !== 'done' && !noDownload(x));   // a download waits for the downloads above it
@@ -511,6 +688,7 @@
     if (it.state === 'done') t = it.bytes_total ? size(it.bytes_total) : '';
     else if (it.state === 'downloading') t = [`${size(it.bytes_done)} of ${size(it.bytes_total)}`, it.retry_in_s ? retryIn(it.retry_in_s) : rate(it.rate_bps), eta(it.eta_s)].filter(Boolean).join(' · ');
     else if (it.state === 'paused' && noDownload(it)) t = `${STOPPED[it.paused_from] || 'Stopped'}${it.paused_from === 'unpacking' && it.bytes_done && it.bytes_total ? ` at ${size(it.bytes_done)} of ${size(it.bytes_total)}` : ''}. Nothing to download.`;
+    else if (it.kind === 'mapset' && (it.state === 'waiting' || it.state === 'paused')) t = 'After the maps above are downloaded';
     else if (it.state === 'waiting' && !it.bytes_done && checkOnly(it)) t = it.bytes_total ? `Already on this computer: ${size(it.bytes_total)} to check${afterAbove(it) ? ', after the one above' : ''}` : '';
     else if ((it.state === 'waiting' || it.state === 'paused') && !it.bytes_done) t = it.bytes_total ? `${size(it.bytes_total)} to download${behind(it) ? ', after the one above' : ''}` : '';
  else if (it.state === 'paused' || it.state === 'waiting' || it.state === 'failed') t = it.bytes_total && it.bytes_done ? `${size(it.bytes_done)} of ${size(it.bytes_total)}` : '';
@@ -524,7 +702,7 @@
         : [`Checking: ${size(Math.min(it.bytes_done, it.bytes_total))} of ${size(it.bytes_total)}`, whole ? eta(it.eta_s) : ''].filter(Boolean).join(' · ');
     }
     else if (it.state === 'unpacking') t = it.bytes_total ? `Unpacking: ${size(it.bytes_done)} of ${size(it.bytes_total)}${it.eta_s != null ? ' · ' + eta(it.eta_s) : ''}` : 'Opening the files into the library folder';
-    else if (it.state === 'activating') t = it.kind === 'map' ? 'Switching to the new map' : 'Switching to the new library';
+    else if (it.state === 'activating') t = it.kind === 'custom' ? 'Writing the catalog and search index' : it.kind === 'mapset' ? 'Putting the state maps together' : it.kind === 'map' ? 'Switching to the new map' : 'Switching to the new library';
     line.textContent = t;
   }
   function jobView(j) {

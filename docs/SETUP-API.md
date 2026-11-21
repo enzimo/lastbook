@@ -207,3 +207,41 @@ Built by setup-backend (2026-11-12):
   map installed apart (its name is not `pack.json`'s `map`, or `pack-manifest.tsv` lists no `map-set.json`) is checked against its
   `map-set.json` instead: one that checks out is kept when the pack is fetched again for other files; one that does
   not is repaired with its own `map` item, or Repair answers `{code: "unavailable"}` when that map is not offered.
+
+## Several state maps and Custom libraries (enzimo fork)
+
+**A checklist of states.** `POST /api/setup/start {maps: ["CT", "RI"], ...}` names every state whose detailed map the library
+should hold (the screen's checklist). `state.current.maps` lists the states the map holds now. The map starts from the
+pack's own when a pack is installed, else the open library's:
+
+- the same states: no map work;
+- only additions: those states download, then a `mapset` item (id `combine`) adds them to a copy of the map there now;
+- none ticked: the `mapset` item cuts the base map out of the map there now;
+- anything else: every ticked state downloads and the map is built from them alone (a combined map cannot be taken apart).
+  One state alone is that state's own map set, exactly as before.
+
+`engine/setup/mapmerge.py` does the combining: every state set is the base plus the rows in one state's box, cut from the same
+whole-US set with its ids, so adding the rows a set lacks keeps the border overlap and the base once. A combined set's
+`map-set.json` adds `states` and is named like `CT+RI`. Address indexes follow the checklist: one is added per ticked state,
+and those of unticked states go when the new map is switched in (`drop_addresses` in the pending switch). On the All pack the
+checklist only adds or removes address search. Repair downloads every state of a damaged combined map again. Without `maps`,
+`map` and `address_id` work as before.
+
+**A Custom library.** Chosen record by record from the All pack, and downloaded file by file from its zip by byte range
+(`engine/setup/custom.py`).
+
+| Request | Answer |
+|---|---|
+| `POST /api/setup/custom-load` | starts reading the All zip's list of files, `pack-manifest.tsv` and `catalog.json` (about 30 MB) into the settings folder: `{state: "loading", done, total}` |
+| `GET /api/setup/custom` | `{state: "idle", "loading", "ready", "failed" or "unavailable", error, groups: [{id, kind, title, count, bytes, default}], core_bytes, selection}`; `selection` is the open library's own when it is a Custom one |
+| `POST /api/setup/custom-items {group}` | `{group, items: [{id, title, kind, bytes, duration}]}` |
+| `POST /api/setup/start {custom: {groups, add, remove}, maps, ai}` | the job: a `custom` item, then the map items |
+
+Groups: `guides` (what the shipped guides point to), `zim:<id>` (each encyclopedia), `video:<category>`, `doc:<category>`.
+A video brings its transcript and metadata records. Every Custom library has the files no record names, the sources page,
+and its own `catalog.json`, `summary.json`, `pack.json` (`name: "custom"`, with the selection), `pack-manifest.tsv` and
+All's `search.sqlite` cut down to the records kept. Its map comes from the ticked states, so a new one needs at least one.
+Files the open library has with the same path, size and SHA-256 are hard-linked rather than downloaded again. Every request
+names a closed range of the one zip and must carry the ETag seen when the list was read (`changed` error otherwise). Each file
+is checked against All's `pack-manifest.tsv`, which comes from the same zip and is not pinned by the release manifest.
+Repair is not offered for a Custom library.
