@@ -179,7 +179,7 @@
   {
    "id": "gas",
    "label": "I smell gas or need to shut off utilities",
-   "hint": "Rotten-egg smell, hissing, after an earthquake, breaker panel",
+   "hint": "Rotten-egg smell, hissing, propane, after an earthquake, breaker panel",
    "read": [
     {
      "doc": "ed5bac0a81b009",

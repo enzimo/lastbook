@@ -43,5 +43,34 @@ class BusyScenario(unittest.TestCase):
         self.assertEqual(stub.public()['error']['code'], 'server')
 
 
+class RepairScenario(unittest.TestCase):
+    def test_repair_counts_the_bytes_it_checks(self):
+        """manage-ai, Repair: the job says repair; the library, then the AI file already here, are checked with growing bytes and a time left."""
+        now = [1000.0]
+        with mock.patch.object(setup_stub.time, 'time', lambda: now[0]):
+            stub = setup_stub.Stub('manage-ai')
+            stub.start({'repair': True})
+            j = stub.public()
+            self.assertTrue(j['repair'])
+            self.assertEqual([i['state'] for i in j['items']], ['waiting', 'waiting'])   # as the engine answers
+            self.assertEqual([(i['kind'], i.get('source')) for i in j['items']], [('pack', 'download'), ('model', 'found')])
+            seen = {'pack': [], 'model': []}
+            for _ in range(60):
+                now[0] += 1
+                stub.tick()
+                for it in stub.public()['items']:
+                    if it['state'] == 'verifying':
+                        seen[it['kind']].append((it['bytes_done'], it['eta_s']))
+                    self.assertNotEqual(it['state'], 'downloading')
+                if stub.public()['state'] == 'done':
+                    break
+        self.assertEqual(stub.public()['state'], 'done')
+        for kind, s in seen.items():
+            done = [d for d, _ in s]
+            self.assertEqual(done, sorted(done), kind)
+            self.assertGreater(len(set(done)), 3, kind)
+            self.assertTrue(all(e is not None for _, e in s[1:]), kind)
+
+
 if __name__ == '__main__':
     unittest.main()

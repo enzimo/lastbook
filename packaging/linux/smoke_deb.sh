@@ -1,7 +1,7 @@
 #!/bin/bash
-# Smoke test of a built .deb in a clean copy of the Ubuntu release it was built for (a fresh ubuntu:24.04 or ubuntu:26.04 container, as root):
+# Smoke test of a built .deb in a clean copy of the release it was built for (a fresh ubuntu:24.04, ubuntu:26.04 or debian:13 container, as root):
 #   docker run --rm -v <folder with the .deb and LastbookData>:/t ubuntu:24.04 bash /t/smoke_deb.sh /t/Lastbook_<v>_amd64.deb /t/LastbookData
-# Installs the .deb with apt (so Depends are resolved from Ubuntu's archive), starts it under Xvfb with a session bus as an ordinary
+# Installs the .deb with apt (so Depends are resolved from the release's archive), starts it under Xvfb with a session bus as an ordinary
 # user, once on a library and once with none (setup), checks the window, the log and one copy only, takes screenshots into /t/shots,
 # then removes the package and checks the person's folders are still there.
 set -uo pipefail

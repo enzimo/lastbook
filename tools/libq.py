@@ -78,7 +78,10 @@ def main(a):
             try:
                 arc = Archive(path)
                 if not arc.has_fulltext_index: print(f'{path.name}: no full-text index, not searched'); continue
-                for p in Searcher(arc).search(Query().set_query(a[1])).getResults(0, 8):
+                results = Searcher(arc).search(Query().set_query(a[1]))
+                get_results = getattr(results, 'getResults', None) or getattr(results, 'get_results')   # libzim 4.x renamed the camelCase calls
+                for r in get_results(0, 8):
+                    p = r if isinstance(r, str) else r.path   # libzim 3.x yields path strings, 4.x SearchResult objects
                     print(f'zim/{path.name}/{p} | {arc.get_entry_by_path(p).title}')
             except Exception as e:           # one damaged file must not cost the answers from the others
                 print(f'{path.name}: skipped ({type(e).__name__})')

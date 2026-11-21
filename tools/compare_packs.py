@@ -4,15 +4,18 @@
   python3 tools/compare_packs.py OLD/pack-manifest.tsv NEW/pack-manifest.tsv [--list]
   python3 tools/compare_packs.py --data /path/to/LastbookData NEW/pack-manifest.tsv [--list]
 
-With --data, the installed list is that library's own pack-manifest.tsv. Only the two lists are compared (path, size and
-SHA-256 of each file); no file in the library is opened, nothing is downloaded and no port is used. This is a first step
-toward upgrades that fetch only what changed (issue #144); setup does not use it yet.
+With two lists, only they are compared (path, size and SHA-256 of each file). With --data, the installed list is that
+library's own pack-manifest.tsv, and the plan also lists what an update would keep as it is: a map installed on its own,
+the local AI, address indexes and any other file neither list names (install.plan_update). Then the names and sizes of
+the library's files are read, but no file is opened. Nothing is downloaded, written or deleted, and no port is used.
+This is a step toward upgrades that fetch only what changed (issue #144); setup does not use it yet.
 """
 import argparse, sys
 from pathlib import Path
 HERE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HERE))
 from engine.setup import install  # noqa: E402
+KEPT = install.KEPT_KINDS
 
 
 def files(n):
@@ -32,28 +35,40 @@ def main(args):
     ap.add_argument('--list', action='store_true', help='also list each path, under its heading')
     ap.add_argument('manifests', nargs='+', type=Path, help='OLD and NEW pack-manifest.tsv, or only NEW with --data')
     a = ap.parse_args(args)
-    if a.data:
-        a.manifests.insert(0, Path(a.data) / 'pack-manifest.tsv')
-    if len(a.manifests) != 2:
+    if len(a.manifests) != (1 if a.data else 2):
         ap.error('give the installed and the new pack-manifest.tsv, or --data and the new one')
     try:
-        old, new = (install.read_pack_manifest(p) for p in a.manifests)
+        if a.data:
+            d = install.plan_update(Path(a.data), install.read_pack_manifest(a.manifests[0]))
+        else:
+            d = install.compare_pack_manifests(*(install.read_pack_manifest(p) for p in a.manifests))
     except OSError as e:
         sys.exit(f'Cannot read {e.filename}: {e.strerror}.')
     except ValueError as e:
         sys.exit(f'Cannot use this list: {e}.')
-    d = install.compare_pack_manifests(old, new)
     for k, what in (('added', 'new in this release'), ('changed', 'differ in size or SHA-256'),
-                    ('unchanged', 'already here, kept as they are'), ('removed', 'no longer in the release')):
+                    ('unchanged', 'already here, the same in the release'), ('removed', 'no longer in the release')):
         print(f'{k:<10} {files(len(d[k])):>12}  {size(d["bytes"][k]):>12}  {what}')
     if d['unsafe']:
         print(f'{"unsafe":<10} {files(len(d["unsafe"])):>12}  {"":>12}  paths outside the library, never used')
+    kept = d.get('kept')
+    if kept:
+        print('\nKept as they are, not part of the pack:')
+        for k, what in (('map', f'your own map ({d["map"]})' if d.get('map') else 'your own map'), ('model', 'the local AI'),
+                        ('addresses', 'address search'), ('other', 'other files in the library')):
+            if kept[k]:
+                print(f'{k:<10} {files(len(kept[k])):>12}  {size(d["kept_bytes"][k]):>12}  {what}')
     print(f'\nTo fetch: {size(d["fetch_bytes"])} (added and changed). Already here: {size(d["reuse_bytes"])}.')
     if a.list:
         for k in ('added', 'changed', 'removed', 'unsafe', 'unchanged'):
             if d[k]:
                 print(f'\n{k}:')
                 for rel in d[k]:
+                    print('  ' + rel)
+        for k in KEPT if kept else ():
+            if kept[k]:
+                print(f'\nkept ({k}):')
+                for rel, _ in kept[k]:
                     print('  ' + rel)
 
 

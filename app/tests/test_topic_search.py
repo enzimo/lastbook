@@ -131,6 +131,15 @@ FIRST = {
     'house fire': ['disaster', 'home-fire'], 'my house is on fire': ['disaster', 'home-fire'],
     'smog': ['shelter', 'smoke'],   # winter smog in Lahore and Delhi; the choice cites a page on particles and ozone
 }
+# Words that a reading already cited under a choice is about, but that no title, keyword, label or hint held, so a search
+# for them found nothing: [guide, choice] that comes first.
+ALREADY_COVERED = {
+    'pets': ['food', 'special'], 'propane': ['power', 'gas'], 'propane tank': ['power', 'gas'], 'dental': ['health', None],
+}
+# An emergency that happens to mention a new word still opens the urgent choice first, not the routine one the word was added to.
+URGENT_FIRST = {
+    'child unconscious after pet food': ['hurt', 'breathing'], 'child swallowed pet food': ['hurt', 'poison'],
+}
 # Searches the new words must not disturb: [guide, choice] that comes first.
 UNDISTURBED = {
     'bus': ['disaster', 'no-car'], 'no bus': ['disaster', 'no-car'], 'bar soap': ['sanitation', 'hands'],
@@ -139,6 +148,9 @@ UNDISTURBED = {
     'ice': ['water', 'inhome'], 'micro-hydro': ['energy', None], 'wind': ['disaster', 'hurricane'],
     'winter storm': ['shelter', 'cold'], 'furnace smells like gas': ['power', 'gas'], 'gas furnace': ['power', 'gas'],
     'lost in the forest': ['comms', 'signal'],
+    'baby formula': ['food', 'special'], 'food allergies': ['food', 'outage'], 'spoiled food': ['food', 'outage'],
+    'pet food': ['food', 'outage'],
+    'dentist': ['health', None], 'toothache': ['health', 'teeth'],
     'cold frame': ['repair', 'build'], 'freezing': ['shelter', 'cold'],
     'fire alarm': ['disaster', 'home-fire'], 'smoke alarm': ['disaster', 'home-fire'], 'smoke': ['disaster', 'smoke'],
     'fires after an earthquake': ['disaster', 'earthquake-after'],
@@ -159,7 +171,32 @@ URGENT = {
 }
 # A breathing emergency after a sting must not open routine sting care.
 NOT_STING = ["bee sting can't breathe", 'bee sting cannot breathe', 'bee sting unconscious', 'wasp sting unconscious']
-TOPS = sorted({*SAME_AS, *SAME_AS.values(), *SAME_GUIDE, *SAME_GUIDE.values(), *FIRST, *UNDISTURBED, *URGENT, *EVERYDAY, *LISTED, *NOT_STING})
+TOPS = sorted({*SAME_AS, *SAME_AS.values(), *SAME_GUIDE, *SAME_GUIDE.values(), *FIRST, *ALREADY_COVERED, *URGENT_FIRST, *UNDISTURBED, *URGENT, *EVERYDAY, *LISTED, *NOT_STING})
+
+# Words used in Thailand and Denmark. Emergency numbers find what 911 finds; haze, PM2.5 and cloudburst sit in a
+# guide's keywords only and open the guide their US word opens. Thailand's fire number, 199, is left out: a fire
+# number must not open first aid (as the UAE's 997 in #98).
+TH_DK_SAME_AS = {'1669': '911', '191': '911', '1813': '911'}
+NOT_FIRST_AID = ['199']
+TH_DK_SAME_GUIDE = {'haze': 'air quality', 'PM2.5': 'air quality', 'pm2.5': 'air quality', 'cloudburst': 'flood'}
+# Searches those words must not disturb: [guide, choice] that comes first.
+TH_DK_UNDISTURBED = {'cloud': ['disaster', 'tornado'], 'funnel cloud': ['disaster', 'tornado'],
+                     'burn': ['hurt', 'burn'], 'flood': ['disaster', 'flood'], 'mask': ['shelter', None]}
+TOPS = sorted({*TOPS, *TH_DK_SAME_AS, *TH_DK_SAME_GUIDE, *TH_DK_SAME_GUIDE.values(), *TH_DK_UNDISTURBED,
+              'burning', 'season', *NOT_FIRST_AID})
+
+# A question about her ranks exactly as the same question about him. A guide word only has to start with a search
+# word, so "she" found "shelter" and put Shelter in place first; "her" and "his" found "here" and "hissing".
+SAME_FOR_HIM = {
+    'she is bleeding': 'he is bleeding', "she can't breathe": "he can't breathe", 'is she breathing': 'is he breathing',
+    'she is choking': 'he is choking', 'she fell and hit her head': 'he fell and hit his head',
+    'she burned her hand': 'he burned his hand', 'she has a fever': 'he has a fever',
+    'her arm is bleeding': 'his arm is bleeding',
+}
+# Typing "shelter" still finds it from "shel": [guide, choice] that comes first.
+STILL_SHELTER = {'shel': ['disaster', 'shelter-in-place'], 'shelter': ['disaster', 'shelter-in-place'],
+                 'shelter in place': ['disaster', 'shelter-in-place']}
+TOPS = sorted({*TOPS, *SAME_FOR_HIM, *SAME_FOR_HIM.values(), *STILL_SHELTER})
 
 # A made-up topic in Spanish and Chinese: found by Spanish words and by a single Han character.
 OWN = {'id': 'own', 'title': 'Agua potable', 'short': 'Hervir el agua', 'keywords': ['水'], 'choices': []}
@@ -305,6 +342,27 @@ class TopicSearch(unittest.TestCase):
                     self.assertEqual(ok(case['now']), case['before'])
         self.assertGreater(sum(1 for c in self.seg['rank'] if c['before']), 30)   # the list does reach the guides
 
+    def test_words_used_in_thailand_and_denmark(self):
+        for r in self.modes:
+            top = dict(zip(TOPS, (ok(e) for e in r['tops'])))
+            for q, us in TH_DK_SAME_AS.items():
+                with self.subTest(q=q, us=us, segmenter=r['segmenter']):
+                    self.assertTrue(top[us])
+                    self.assertEqual(top[q], top[us])
+            for q, us in TH_DK_SAME_GUIDE.items():
+                with self.subTest(q=q, us=us, segmenter=r['segmenter']):
+                    self.assertTrue(top[q])
+                    self.assertEqual(top[q][0][0], top[us][0][0])
+            for q, first in TH_DK_UNDISTURBED.items():
+                with self.subTest(q=q, segmenter=r['segmenter']):
+                    self.assertEqual(top[q][:1], [first])
+            for q in ('burning', 'season'):                    # "burning season" was left out for these two
+                with self.subTest(q=q, segmenter=r['segmenter']):
+                    self.assertEqual(top[q], [])
+            for q in NOT_FIRST_AID:                             # a fire number does not open the hurt guide
+                with self.subTest(q=q, segmenter=r['segmenter']):
+                    self.assertNotIn('hurt', [guide for guide, _ in top[q]])
+
     def test_words_used_outside_the_us(self):
         for r in self.modes:
             top = dict(zip(TOPS, (ok(e) for e in r['tops'])))
@@ -316,7 +374,7 @@ class TopicSearch(unittest.TestCase):
                 with self.subTest(q=q, us=us, segmenter=r['segmenter']):
                     self.assertTrue(top[q])
                     self.assertEqual(top[q][0][0], top[us][0][0])
-            for q, first in [*FIRST.items(), *UNDISTURBED.items()]:
+            for q, first in [*FIRST.items(), *ALREADY_COVERED.items(), *URGENT_FIRST.items(), *UNDISTURBED.items()]:
                 with self.subTest(q=q, segmenter=r['segmenter']):
                     self.assertEqual(top[q][0], first)
 
@@ -348,6 +406,17 @@ class TopicSearch(unittest.TestCase):
                 with self.subTest(q=q, segmenter=r['segmenter']):
                     self.assertEqual(top[q][:1], [first])
 
+
+    def test_her_ranks_as_him(self):
+        for r in self.modes:
+            top = dict(zip(TOPS, (ok(e) for e in r['tops'])))
+            for q, him in SAME_FOR_HIM.items():
+                with self.subTest(q=q, segmenter=r['segmenter']):
+                    self.assertTrue(top[him])                      # the question about him does find a guide
+                    self.assertEqual(top[q], top[him])
+            for q, first in STILL_SHELTER.items():
+                with self.subTest(q=q, segmenter=r['segmenter']):
+                    self.assertEqual(top[q][:1], [first])
 
 if __name__ == '__main__':
     unittest.main()

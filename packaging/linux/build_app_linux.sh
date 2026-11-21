@@ -1,16 +1,18 @@
 #!/bin/bash
-# Builds the Lastbook .deb for one Ubuntu LTS release, x86_64. Run inside that release (a container is fine) from a checkout:
+# Builds the Lastbook .deb for one Ubuntu LTS or Debian release, x86_64. Run inside that release (a container is fine) from a checkout:
 #   apt-get install -y python3 python3-venv python3-pil dpkg-dev binutils   (the script installs them itself when run as root)
 #   bash packaging/linux/build_app_linux.sh
 # Each release has its own python3, and the wheels in lib/ are built for one Python only, so each release gets its own .deb:
 #   Ubuntu 24.04  python3 3.12  Lastbook_<version>_amd64.deb               Version: <version>
 #   Ubuntu 26.04  python3 3.14  Lastbook_<version>_ubuntu26.04_amd64.deb   Version: <version>+ubuntu26.04
-# The two hold different files, so they have different versions; +ubuntu26.04 sorts after <version>, so apt takes it as the newer one.
+#   Debian 13     python3 3.13  Lastbook_<version>_debian13_amd64.deb      Version: <version>+debian13
+# They hold different files, so they have different versions; +ubuntu26.04 sorts after <version>, so apt takes it as the newer one.
+# Debian 13 (trixie) has neither Ubuntu's 3.12 nor its 3.14, so neither Ubuntu package installs there (#106).
 #
 # What the .deb holds (nothing is written outside these at install, and nothing at all at removal but these):
 #   /opt/lastbook/            lastbook.py (the launcher), app/ (main, bridge, shell_linux), server.py and the engine, web/ and content/ as they
 #                             ship (ship_app_files.py), setup/manifest-v1.json, engine/setup/roots.pem, lib/ (wheels for the system's
-#                             python3, 3.12 or 3.14: requirements_linux.txt), llm/ (lastbook-llm and its llama.cpp libraries, when derived/llm/bin-linux
+#                             python3, 3.12, 3.13 or 3.14: requirements_linux.txt), llm/ (lastbook-llm and its llama.cpp libraries, when derived/llm/bin-linux
 #                             has them: packaging/llm/build_llm_linux.sh), gst/ (lastbooksrc, the video source: gst/lastbooksrc.c), VERSION
 #   /usr/bin/lastbook          runs /usr/bin/python3 -I -B /opt/lastbook/lastbook.py
 #   /usr/share/applications/lastbook.desktop, /usr/share/icons/hicolor/<size>/apps/lastbook.png
@@ -20,7 +22,7 @@
 set -euo pipefail
 HERE="$(dirname "$(realpath "$0")")"
 ROOT="$(dirname "$(dirname "$HERE")")"
-APP_VERSION="${LASTBOOK_VERSION:-1.1.13}"
+APP_VERSION="${LASTBOOK_VERSION:-1.1.14}"
 BUILD="$ROOT/derived/app-build/linux"
 OUT="$BUILD/$(date +%Y%m%d-%H%M%S)"
 STAGE="$OUT/root"
@@ -33,7 +35,8 @@ OS="$(. /etc/os-release; echo "$ID $VERSION_ID")"
 case "$OS" in                         # the release, its own python3, and the .deb's version and file name
   "ubuntu 24.04") WANT_PY=3.12; DEB_VERSION="$APP_VERSION"; DEB="$OUT/Lastbook_${APP_VERSION}_amd64.deb" ;;
   "ubuntu 26.04") WANT_PY=3.14; DEB_VERSION="$APP_VERSION+ubuntu26.04"; DEB="$OUT/Lastbook_${APP_VERSION}_ubuntu26.04_amd64.deb" ;;
-  *) echo "build on Ubuntu 24.04 or 26.04 (this is $OS): the wheels must match its python3" >&2; exit 1 ;;
+  "debian 13")    WANT_PY=3.13; DEB_VERSION="$APP_VERSION+debian13"; DEB="$OUT/Lastbook_${APP_VERSION}_debian13_amd64.deb" ;;
+  *) echo "build on Ubuntu 24.04 or 26.04, or Debian 13 (this is $OS): the wheels must match its python3" >&2; exit 1 ;;
 esac
 if [ "$(id -u)" = 0 ] && ! { python3 -c 'import venv, PIL' 2>/dev/null && pkg-config --exists gstreamer-base-1.0; }; then
   apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3 python3-venv python3-pil dpkg-dev binutils file gcc pkg-config libgstreamer1.0-dev >/dev/null
@@ -61,7 +64,7 @@ find "$OPT/lib" -type f -name '*_tests*' -delete
 mkdir -p "$OPT/app" "$OPT/engine/setup" "$OPT/setup"
 cp "$ROOT/app/main.py" "$ROOT/app/bridge.py" "$ROOT/app/shell_linux.py" "$OPT/app/"
 cp "$ROOT/server.py" "$ROOT/retrieval.py" "$ROOT/assistant.py" "$ROOT/llm_local.py" "$OPT/"
-cp "$ROOT/engine/__init__.py" "$ROOT/engine/paths.py" "$ROOT/engine/library.py" "$ROOT/engine/safe_paths.py" "$ROOT/engine/encyclopedias.py" "$ROOT/engine/saved_pages.py" "$ROOT/engine/address_search.py" "$ROOT/engine/page_tables.py" "$ROOT/engine/update.py" "$OPT/engine/"
+cp "$ROOT/engine/__init__.py" "$ROOT/engine/paths.py" "$ROOT/engine/library.py" "$ROOT/engine/safe_paths.py" "$ROOT/engine/encyclopedias.py" "$ROOT/engine/saved_pages.py" "$ROOT/engine/address_search.py" "$ROOT/engine/page_tables.py" "$ROOT/engine/update.py" "$ROOT/engine/notes.py" "$OPT/engine/"
 cp "$ROOT"/engine/setup/*.py "$ROOT/engine/setup/roots.pem" "$OPT/engine/setup/"
 cp -R "$OUT/ship/web" "$OUT/ship/content" "$OPT/"
 cp "$OUT/ship/setup/manifest-v1.json" "$OPT/setup/"

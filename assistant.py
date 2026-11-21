@@ -126,18 +126,21 @@ def model_status():
 
 
 # --------------------------------------------------------------- retrieval --
-def _fts(q, limit=80, kinds=None):
+def _fts(q, limit=80, ids=None):
+    """ids: a JSON list from S.search_ids, so the LIMIT counts only the rows the caller can use."""
     content, groups = S.query_groups(q)
     if not groups:
         return []
+    only = (ids,) if ids is not None else ()
     con = sqlite3.connect(ro_uri(S.library.DB), uri=True)
-    sql = ("SELECT doc_id,page,snippet(pages,6,'','',' … ',40) FROM pages WHERE pages MATCH ? "
+    sql = ("SELECT doc_id,page,snippet(pages,6,'','',' … ',40) FROM pages WHERE pages MATCH ? " +
+           ("AND doc_id IN (SELECT value FROM json_each(?)) " if only else "") +
            "ORDER BY bm25(pages,0,6,1,1,0,0,1) LIMIT ?")
     rows = []
     try:
-        rows = con.execute(sql, (S.fts_expr(groups), limit)).fetchall()
+        rows = con.execute(sql, (S.fts_expr(groups),) + only + (limit,)).fetchall()
         if len(rows) < 10 and len(groups) > 1:
-            rows += con.execute(sql, (' OR '.join('(' + S.fts_expr([g]) + ')' for g in groups), limit)).fetchall()
+            rows += con.execute(sql, (' OR '.join('(' + S.fts_expr([g]) + ')' for g in groups),) + only + (limit,)).fetchall()
     except sqlite3.OperationalError:
         pass
     con.close()
@@ -157,7 +160,9 @@ def hybrid(q, k=8, kind='any', doc=None):
     if doc:
         allowed = (lambda base: (lambda d: d == doc and base(d)))(allowed)
     kw = []
-    for doc_id, page, snip in _fts(q, 120):
+    # Videos only, in the query itself (as S.find does): a broad word would fill the LIMIT with manual pages.
+    ids = S.search_ids(lambda r: r['kind'] == 'video' and allowed(r['id'])) if kind == 'video' else None
+    for doc_id, page, snip in _fts(q, 120, ids):
         r = cat['by_id'].get(doc_id)
         if not r:
             continue

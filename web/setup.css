@@ -133,6 +133,9 @@ html.plat-mac.in-app .s-top{padding-top:30px}   /* below the traffic lights of a
 
 .s-done{text-align:center;padding:40px 0 0}
 .s-done .lead{margin:0 auto 22px}
+.s-two{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.s-done .s-two{justify-content:center}
+.s-done .s-note{margin:0 auto 20px}
 .s-big{width:72px;height:72px;color:var(--accent);stroke-width:1.6}
 .s-rec.bad{background:var(--warn-bg);border:1px solid var(--warn-line)}
 .s-rec.bad svg{color:var(--warn)}

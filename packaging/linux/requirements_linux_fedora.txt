@@ -1,0 +1,13 @@
+# The source run on Fedora (and any Linux source install on Python 3.15): README's Linux section, run through
+# packaging/linux/run_source_linux.sh. The packaged Ubuntu install keeps requirements_linux.txt unchanged —
+# this file exists so the source path can carry the newer wheels without touching the packaged pins.
+# 4.1.0: one cp311-abi3 wheel covering Python 3.11 through 3.15 (3.13.x had none for 3.15, which Fedora 45 ships);
+# tools/libq.py spells the search results for both libzim namings (3.x getResults / 4.x get_results, which yields
+# SearchResult objects), so either version works.
+libzim==4.1.0
+# server.py renders PDF pages through bitmap.to_numpy(). 2.5.x has wheels for 3.12 through 3.15 but dropped 3.11,
+# so the marker keeps 2.4.6 on that Python.
+numpy==2.4.6; python_version < '3.12'
+numpy==2.5.5; python_version >= '3.12'
+beautifulsoup4==4.15.0
+pypdfium2==5.14.0
